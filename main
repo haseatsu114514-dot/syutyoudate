@@ -1,0 +1,720 @@
+// ============================================
+// メイン処理ファイル - main.gs
+// ============================================
+
+/**
+ * Webhook受信処理（LINE Messaging API）
+ */
+function doPost(e) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== Webhook受信 ===');
+
+    if (!e || !e.postData || !e.postData.contents) {
+      console.error('Invalid request: no postData');
+      return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Invalid request' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const data = JSON.parse(e.postData.contents);
+
+    if (!data.events || !Array.isArray(data.events)) {
+      console.error('Invalid request: no events array');
+      return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'No events' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    console.log('受信イベント数:', data.events.length);
+
+    data.events.forEach((event, index) => {
+      try {
+        console.log(`\nイベント${index + 1}/${data.events.length}を処理中...`);
+        handleEvent(event);
+      } catch (eventError) {
+        console.error(`イベント${index + 1}の処理エラー:`, eventError);
+        logError('イベント処理エラー', eventError.toString());
+      }
+    });
+
+    const duration = Date.now() - startTime;
+    console.log(`\n=== Webhook処理完了 (${duration}ms) ===`);
+
+    return ContentService.createTextOutput(JSON.stringify({ status: 'ok' }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`doPost error (${duration}ms):`, error);
+    logError('doPost error', error.toString());
+
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * イベントハンドラー
+ */
+function handleEvent(event) {
+  console.log('イベントタイプ:', event.type);
+
+  if (event.source && event.source.userId) {
+    console.log('★★★ 受信したユーザーID:', event.source.userId, '★★★');
+  }
+
+  if (event.type === 'message' && event.message.type === 'text') {
+    handleTextMessage(event);
+  } else if (event.type === 'postback') {
+    handlePostback(event);
+  } else {
+    console.log('未対応のイベントタイプ:', event.type);
+  }
+}
+
+/**
+ * テキストメッセージ処理
+ */
+function handleTextMessage(event) {
+  const userId = event.source.userId;
+  const text = event.message.text.trim();
+
+  console.log('テキスト受信:', text);
+  logAction('テキスト受信', userId, text);
+
+  // ID確認コマンド
+  if (text === 'ID' || text === 'id' || text === 'ユーザーID' || text === 'マイID') {
+    const replyToken = event.replyToken;
+    
+    const url = 'https://api.line.me/v2/bot/message/reply';
+    
+    const payload = {
+      replyToken: replyToken,
+      messages: [{
+        type: 'text',
+        text: `あなたのユーザーID:\n${userId}\n\nこのIDをconfig.gsのADMIN_USER_IDに設定してください。`
+      }]
+    };
+    
+    let token = CONFIG.LINE_CHANNEL_ACCESS_TOKEN;
+    
+    const options = {
+      method: 'post',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+    
+    let response = UrlFetchApp.fetch(url, options);
+    let responseCode = response.getResponseCode();
+    
+    if (responseCode !== 200) {
+      console.log('メインbotトークンで失敗、管理者botトークンで再試行');
+      token = CONFIG.ADMIN_BOT_TOKEN;
+      options.headers.Authorization = `Bearer ${token}`;
+      response = UrlFetchApp.fetch(url, options);
+      responseCode = response.getResponseCode();
+    }
+    
+    if (responseCode === 200) {
+      console.log('✅ ID返信成功:', userId);
+      logAction('ID確認', userId, userId);
+    } else {
+      console.error('❌ ID返信失敗:', response.getContentText());
+    }
+    
+    return;
+  }
+
+  // 予約開始
+  if (text === '予約' || text === 'よやく') {
+    const replyMessages = [{
+      type: 'template',
+      altText: '予約フォーム',
+      template: {
+        type: 'buttons',
+        text: '予約フォームを開きます',
+        actions: [
+          {
+            type: 'uri',
+            label: '予約する',
+            uri: buildBookingFormUrl(userId, true)
+          }
+        ]
+      }
+    }];
+    sendLineMessage(userId, replyMessages);
+    logAction('予約開始', userId, '');
+  }
+  // 予約確認
+  else if (text === '予約確認' || text === '予約一覧') {
+    showUserBookings(userId);
+  }
+  // その他のメッセージ
+  else {
+    const replyMessages = [{
+      type: 'text',
+      text: '「予約」と送信すると予約できます\n\n予約確認は「予約確認」と送信してください'
+    }];
+
+    sendLineMessage(userId, replyMessages);
+  }
+}
+
+/**
+ * 予約一覧表示
+ */
+function showUserBookings(userId) {
+  try {
+    const bookings = getUserBookings(userId);
+
+    if (!bookings || bookings.length === 0) {
+      sendLineMessage(userId, [{
+        type: 'text',
+        text: '現在、予約はありません。\n\n新規予約は「メニュー」から行えます。'
+      }]);
+      return;
+    }
+
+    let message = '【あなたの予約一覧】\n\n';
+
+    bookings.forEach((booking, index) => {
+      message += `${index + 1}. 受付番号: ${booking.requestId}\n`;
+      message += `   日時: ${booking.desiredDateTime}\n`;
+      message += `   コース: ${booking.course}\n`;
+      message += `   状態: ${booking.status}\n`;
+
+      if (booking.status === '承認済み' && booking.approvedDateTime) {
+        message += `   確定日時: ${booking.approvedDateTime}\n`;
+      }
+
+      message += '\n';
+    });
+
+    sendLineMessage(userId, [{
+      type: 'text',
+      text: message
+    }]);
+
+    logAction('予約一覧表示', userId, `${bookings.length}件`);
+
+  } catch (error) {
+    console.error('showUserBookings error:', error);
+    sendLineMessage(userId, [{
+      type: 'text',
+      text: '予約一覧の取得中にエラーが発生しました。'
+    }]);
+  }
+}
+
+/**
+ * ポストバック処理（最速返信対応）
+ */
+function handlePostback(event) {
+  const userId = event.source.userId;
+  const data = event.postback.data;
+  const replyToken = event.replyToken;
+
+  console.log('=== ポストバック処理開始 ===');
+  logAction('ポストバック受信', userId, data);
+
+  if (!data) return;
+
+  const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+
+  // 承認処理
+  if (data.startsWith('approve_')) {
+    const requestId = data.replace('approve_', '');
+    
+    // ★最速返信
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: `処理中...`
+    }], adminToken);
+    
+    approveReservation(requestId, userId);
+  }
+  // お断り処理
+  else if (data.startsWith('reject_')) {
+    const requestId = data.replace('reject_', '');
+    
+    // ★最速返信
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: `処理中...`
+    }], adminToken);
+    
+    rejectReservation(requestId, userId);
+  }
+}
+
+/**
+ * 最速返信用の関数
+ */
+function replyLineMessage(replyToken, messages, token) {
+  const url = 'https://api.line.me/v2/bot/message/reply';
+  const accessToken = token || CONFIG.LINE_CHANNEL_ACCESS_TOKEN;
+  
+  UrlFetchApp.fetch(url, {
+    'headers': {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Authorization': 'Bearer ' + accessToken,
+    },
+    'method': 'post',
+    'payload': JSON.stringify({
+      'replyToken': replyToken,
+      'messages': messages,
+    }),
+    'muteHttpExceptions': true
+  });
+}
+
+/**
+ * 予約フォームURL生成
+ */
+function buildBookingFormUrl(userId, isFirstTime) {
+  const formId = isFirstTime ? CONFIG.FORM.BOOKING.ID : CONFIG.FORM.APPROVED.ID;
+  const entryId = isFirstTime ? CONFIG.FORM.BOOKING.USER_ID_ENTRY : CONFIG.FORM.APPROVED.USER_ID_ENTRY;
+
+  if (!isFirstTime) {
+    return `https://docs.google.com/forms/d/e/${formId}/viewform?usp=pp_url&entry.706843991=%E3%80%92&${entryId}=${encodeURIComponent(userId)}`;
+  }
+
+  return `https://docs.google.com/forms/d/e/${formId}/viewform?usp=pp_url&${entryId}=${encodeURIComponent(userId)}`;
+}
+
+/**
+ * 予約承認処理（軽量化版）
+ */
+function approveReservation(requestId, adminUserId) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 予約承認処理開始 ===');
+    console.log('受付番号:', requestId);
+
+    const booking = getBooking(requestId);
+
+    if (!booking) {
+      console.error('予約が見つかりません');
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(adminUserId, [{
+        type: 'text',
+        text: `エラー: 受付番号 ${requestId} の予約が見つかりません`
+      }], adminToken);
+      return;
+    }
+
+    if (booking.status === '承認済み') {
+      console.log('すでに承認済みです');
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(adminUserId, [{
+        type: 'text',
+        text: `この予約はすでに承認済みです\n\n受付番号: ${requestId}`
+      }], adminToken);
+      return;
+    }
+
+    // ステータス更新
+    booking.status = '承認済み';
+    booking.approvedDateTime = booking.desiredDateTime;
+    booking.approvedAt = new Date().toISOString();
+    booking.approvedBy = adminUserId;
+    booking.updatedAt = new Date().toISOString();
+
+    const saved = saveBooking(requestId, booking);
+
+    if (!saved) {
+      console.error('予約更新に失敗');
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(adminUserId, [{
+        type: 'text',
+        text: `予約の更新に失敗しました\n\n受付番号: ${requestId}`
+      }], adminToken);
+      return;
+    }
+
+    console.log('承認処理成功:', requestId);
+
+    // ユーザーへ通知（承認後フォームURLを含む）
+    const approvedFormUrl = buildBookingFormUrl(booking.userId, false);
+
+    const userMessage = {
+      type: 'template',
+      altText: '予約承認のお知らせ',
+      template: {
+        type: 'buttons',
+        text: `リクエストを承認いたしました\n\n━━━━━━━━━━━━━━\n${booking.approvedDateTime}\n${booking.course}\n━━━━━━━━━━━━━━\n\nまだ予約は確定していません\n\n下記ボタンから追加情報(お名前・ご連絡先・ご住所)を入力してください`,
+        actions: [
+          {
+            type: 'uri',
+            label: '追加情報を入力する',
+            uri: approvedFormUrl
+          }
+        ]
+      }
+    };
+
+    sendLineMessage(booking.userId, [userMessage]);
+
+    // 管理者へ確認通知（簡潔版）
+    const adminMessage = `承認完了\n\n受付番号\n${requestId}\n\n日時\n${booking.approvedDateTime}\n\nコース\n${booking.course}\n\n場所\n${booking.location}\n\nユーザーに追加情報フォームを送信しました`;
+
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+    sendLineMessage(adminUserId, [{
+      type: 'text',
+      text: adminMessage
+    }], adminToken);
+
+    logAction('予約承認', adminUserId, requestId);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 予約承認処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`approveReservation error (${duration}ms):`, error);
+    logError('予約承認エラー', error.toString());
+  }
+}
+
+/**
+ * 予約お断り処理
+ */
+function rejectReservation(requestId, adminUserId) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 予約お断り処理開始 ===');
+    console.log('受付番号:', requestId);
+
+    const booking = getBooking(requestId);
+
+    if (!booking) {
+      console.error('予約が見つかりません');
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(adminUserId, [{
+        type: 'text',
+        text: `エラー: 受付番号 ${requestId} の予約が見つかりません`
+      }], adminToken);
+      return;
+    }
+
+    if (booking.status === 'お断り') {
+      console.log('すでにお断り済みです');
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(adminUserId, [{
+        type: 'text',
+        text: `この予約はすでにお断り済みです\n\n受付番号: ${requestId}`
+      }], adminToken);
+      return;
+    }
+
+    // ステータス更新
+    booking.status = 'お断り';
+    booking.rejectedAt = new Date().toISOString();
+    booking.rejectedBy = adminUserId;
+    booking.updatedAt = new Date().toISOString();
+
+    const saved = saveBooking(requestId, booking);
+
+    if (!saved) {
+      console.error('予約更新に失敗');
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(adminUserId, [{
+        type: 'text',
+        text: `予約の更新に失敗しました\n\n受付番号: ${requestId}`
+      }], adminToken);
+      return;
+    }
+
+    console.log('お断り処理成功:', requestId);
+
+    // ユーザーへ通知
+    const userMessage = `申し訳ございません\n\n以下の予約リクエストはお受けできませんでした\n\n受付番号\n${requestId}\n\n希望日時\n${booking.desiredDateTime}\n\nコース\n${booking.course}\n\n別の日時でお試しください`;
+
+    sendLineMessage(booking.userId, [{
+      type: 'text',
+      text: userMessage
+    }]);
+
+    // 管理者へ確認通知
+    const adminMessage = `お断り完了\n\n受付番号\n${requestId}\n\n日時\n${booking.desiredDateTime}\n\nコース\n${booking.course}\n\nユーザーに通知しました`;
+
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+    sendLineMessage(adminUserId, [{
+      type: 'text',
+      text: adminMessage
+    }], adminToken);
+
+    logAction('予約お断り', adminUserId, requestId);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 予約お断り処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`rejectReservation error (${duration}ms):`, error);
+    logError('予約お断りエラー', error.toString());
+  }
+}
+
+// ============================================
+// Googleフォーム送信トリガー（統合版）
+// ============================================
+
+/**
+ * フォーム送信時のトリガー関数
+ */
+function onFormSubmit(e) {
+  try {
+    const sheetName = e.range.getSheet().getName();
+    console.log('=== フォーム回答受信 ===');
+    console.log('シート名:', sheetName);
+
+    if (sheetName === 'フォームの回答 1') {
+      console.log('→ 初回予約フォームと判定');
+      handleInitialFormSubmit(e);
+    } else if (sheetName === 'フォームの回答 2') {
+      console.log('→ 承認後フォームと判定');
+      handleApprovedFormSubmit(e);
+    } else {
+      console.error('不明なシート名:', sheetName);
+      logError('フォーム送信エラー', `不明なシート: ${sheetName}`);
+    }
+
+  } catch (error) {
+    console.error('onFormSubmit error:', error);
+    logError('onFormSubmit エラー', error.toString());
+
+    try {
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(CONFIG.ADMIN_USER_ID, [{
+        type: 'text',
+        text: `システムエラー\n\nフォーム送信処理でエラーが発生しました\n\nエラー: ${error.toString()}\n\n実行ログを確認してください`
+      }], adminToken);
+    } catch (notifyError) {
+      console.error('エラー通知失敗:', notifyError);
+    }
+  }
+}
+
+/**
+ * 初回予約フォーム送信処理（高速化版・カレンダーチェック優先）
+ */
+function handleInitialFormSubmit(e) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 初回予約フォーム処理開始 ===');
+
+    const data = e.namedValues;
+    
+    const userId = data['管理用 ID'] ? data['管理用 ID'][0] : null;
+    const name = data['お名前'] ? data['お名前'][0] : '（未入力）';
+    const desiredDate = data['希望日'] ? data['希望日'][0] : null;
+    const desiredTime = data['希望時刻'] ? data['希望時刻'][0] : null;
+    const course = data['コース'] ? data['コース'][0] : null;
+    const location = data['出張場所'] ? data['出張場所'][0] : null;
+
+    if (!userId || !desiredDate || !desiredTime || !course || !location) {
+      console.error('必須項目不足');
+      return;
+    }
+
+    // 日付フォーマットの整形
+    let dateStr = desiredDate;
+    if (desiredDate instanceof Date || typeof desiredDate === 'object') {
+      const d = new Date(desiredDate);
+      dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    const desiredDateTime = `${dateStr} ${desiredTime}`;
+    const requestId = generateRequestId();
+
+    // ★★★ カレンダー空きチェックを最優先で実行 ★★★
+    const availability = checkAllCalendarsAvailability(new Date(desiredDateTime), course);
+
+    // 既に予約が入っている場合は処理を中断
+    if (!availability.available) {
+      console.log('カレンダーに予約あり - リクエストを受け付けません');
+      
+      let rejectionMessage = `申し訳ございません。指定の時間は既に予約が入っています。\n\n再度別の時間でリクエストをいただけますと幸いです。`;
+      
+      if (availability.suggestions && availability.suggestions.length > 0) {
+        rejectionMessage += '\n\n【空いている時間帯】';
+        availability.suggestions.forEach((slot, index) => {
+          rejectionMessage += `\n${index + 1}. ${slot}`;
+        });
+      }
+      
+      sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }]);
+      
+      logAction('予約リクエスト却下（カレンダー重複）', userId, desiredDateTime);
+      
+      const duration = Date.now() - startTime;
+      console.log(`=== カレンダー重複のため処理終了 (${duration}ms) ===`);
+      return;
+    }
+
+    // カレンダーが空いている場合のみ以降の処理を実行
+    console.log('カレンダー空きあり - 予約リクエストを受け付けます');
+
+    // ★1. ユーザーに即座に受付完了を通知
+    const quickUserMessage = `予約リクエストを受け付けました\n\n` +
+                            `${dateStr} ${desiredTime}\n` +
+                            `${course}\n\n` +
+                            `承認をお待ちください\n` +
+                            `(承認後、追加情報の入力をお願いします)`;
+    sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }]);
+
+    // ★2. 予約データ保存
+    saveBooking(requestId, {
+      requestId: requestId,
+      userId: userId,
+      userName: name,
+      desiredDateTime: desiredDateTime,
+      course: course,
+      location: location,
+      status: '承認待ち',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    // ★3. 管理者への通知
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+
+    const adminInfoMessage = {
+      type: 'text',
+      text: `新規予約リクエスト\n\n${name} 様\n${dateStr} ${desiredTime}\n${course}\n${location}`
+    };
+
+    const adminActionMessage = {
+      type: 'template',
+      altText: '予約の確認',
+      template: {
+        type: 'confirm',
+        text: `この予約を受け付けますか？`,
+        actions: [
+          {
+            type: 'postback',
+            label: '受け付ける',
+            data: `approve_${requestId}`
+          },
+          {
+            type: 'postback',
+            label: 'お断りする',
+            data: `reject_${requestId}`
+          }
+        ]
+      }
+    };
+
+    sendLineMessage(CONFIG.ADMIN_USER_ID, [adminInfoMessage], adminToken);
+    Utilities.sleep(300);
+    sendLineMessage(CONFIG.ADMIN_USER_ID, [adminActionMessage], adminToken);
+
+    logAction('予約リクエスト受信', userId, requestId);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 初回フォーム処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    console.error(`handleInitialFormSubmit error:`, error);
+    logError('初回フォーム処理エラー', error.toString());
+  }
+}
+
+/**
+ * 承認後フォーム送信処理（表示改善版）
+ */
+function handleApprovedFormSubmit(e) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 承認後フォーム処理開始 ===');
+
+    const data = e.namedValues;
+    
+    const userId = data['管理用 ID'] ? data['管理用 ID'][0] : null;
+    const phone = data['電話番号'] ? data['電話番号'][0] : null;
+    const postalCode = data['郵便番号'] ? data['郵便番号'][0] : null;
+    const address = data['ご住所'] ? data['ご住所'][0] : null;
+
+    console.log('userId:', userId);
+    console.log('phone:', phone);
+    console.log('postalCode:', postalCode);
+    console.log('address:', address);
+
+    if (!userId || !phone || !address) {
+      console.error('必須項目不足');
+      return;
+    }
+
+    // 最新の承認済み予約を検索
+    const booking = findLatestApprovedBookingByUserId(userId);
+
+    if (!booking) {
+      console.error('承認済み予約が見つかりません');
+      return;
+    }
+
+    const name = booking.userName || '（未設定）';
+
+    // 追加情報を保存
+    booking.additionalInfo = {
+      phone: phone,
+      postalCode: postalCode,
+      address: address,
+      submittedAt: new Date().toISOString()
+    };
+    booking.status = '確定';
+    booking.updatedAt = new Date().toISOString();
+
+    saveBooking(booking.requestId, booking);
+
+    // Googleカレンダーに登録
+    const calendarAdded = addToCalendar(booking.approvedDateTime, booking.course, booking.requestId, name);
+
+    // ★ ユーザーへ確定通知（住所を含む）
+    const userMessage = `ご予約が確定しました\n\n` +
+                       `━━━━━━━━━━━━━━\n` +
+                       `📅 日時\n${booking.approvedDateTime}\n\n` +
+                       `💼 コース\n${booking.course}\n\n` +
+                       `🏠 当日お伺いする住所\n${postalCode}\n${address}\n` +
+                       `━━━━━━━━━━━━━━\n\n` +
+                       `${name} 様\n\n` +
+                       `当日お伺いします\nご不明点はお気軽にお問い合わせください`;
+
+    sendLineMessage(userId, [{ type: 'text', text: userMessage }]);
+
+    // ★ 管理者への確定通知（住所を含む詳細版）
+    const adminMessage = `✅ 予約確定\n\n` +
+                       `━━━━━━━━━━━━━━\n` +
+                       `📅 日時\n${booking.approvedDateTime}\n\n` +
+                       `💼 コース\n${booking.course}\n\n` +
+                       `👤 お名前\n${name} 様\n` +
+                       `━━━━━━━━━━━━━━\n\n` +
+                       `📞 電話番号\n${phone}\n\n` +
+                       `🏠 住所\n${postalCode}\n${address}\n\n` +
+                       `━━━━━━━━━━━━━━\n` +
+                       `受付番号: ${booking.requestId}\n` +
+                       `カレンダー: ${calendarAdded ? '✓' : '✗'}`;
+
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+    sendLineMessage(CONFIG.ADMIN_USER_ID, [{ type: 'text', text: adminMessage }], adminToken);
+
+    logAction('予約確定', userId, booking.requestId);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 承認後フォーム処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`handleApprovedFormSubmit error (${duration}ms):`, error);
+    logError('承認後フォーム処理エラー', error.toString());
+  }
+}
