@@ -1,0 +1,372 @@
+// ============================================
+// テスト用ファイル - test.gs
+// ============================================
+
+/**
+ * セットアップ確認
+ * 【用途】初回設定時、すべての設定が正しいか確認
+ */
+function checkSetup() {
+  console.log('=== セットアップ確認 ===');
+
+  console.log('\n【LINE Bot設定】');
+  console.log('メインBot Token:', CONFIG.LINE_CHANNEL_ACCESS_TOKEN ? '✅ 設定済み' : '❌ 未設定');
+  console.log('管理者Bot Token:', CONFIG.ADMIN_BOT_TOKEN ? '✅ 設定済み' : '❌ 未設定');
+
+  console.log('\n【ユーザーID】');
+  console.log('管理者ID:', CONFIG.ADMIN_USER_ID || '❌ 未設定');
+
+  console.log('\n【カレンダー設定】');
+  console.log('カレンダー数:', CONFIG.CALENDAR_IDS.length, '個');
+  CONFIG.CALENDAR_IDS.forEach((id, index) => {
+    console.log(`  ${index + 1}. ${id}`);
+    try {
+      const calendar = CalendarApp.getCalendarById(id);
+      if (calendar) {
+        console.log(`     ✅ アクセス可能: ${calendar.getName()}`);
+      } else {
+        console.log(`     ❌ アクセス不可`);
+      }
+    } catch (error) {
+      console.log(`     ❌ エラー: ${error.message}`);
+    }
+  });
+
+  console.log('\n【営業時間】');
+  console.log(`営業時間: ${CONFIG.BUSINESS_HOURS.START}:00 〜 ${CONFIG.BUSINESS_HOURS.END}:00`);
+
+  console.log('\n【コース設定】');
+  for (const [courseName, courseConfig] of Object.entries(CONFIG.COURSES)) {
+    console.log(`${courseName}: 施術${courseConfig.duration}分 (前バッファ${courseConfig.bufferBefore}分 / 後バッファ${courseConfig.bufferAfter}分)`);
+  }
+
+  console.log('\n【フォーム設定】');
+  console.log('予約フォームID:', CONFIG.FORM.BOOKING.ID || '❌ 未設定');
+  console.log('承認後フォームID:', CONFIG.FORM.APPROVED.ID || '❌ 未設定');
+
+  console.log('\n✅ セットアップ確認完了');
+}
+
+/**
+ * メインBot送信テスト
+ * 【用途】既存LINE公式アカウント（メインbot）への送信確認
+ */
+function testMainBot() {
+  console.log('=== メインBot送信テスト ===');
+
+  if (!CONFIG.ADMIN_USER_ID) {
+    console.error('❌ ADMIN_USER_IDが設定されていません');
+    return;
+  }
+
+  const result = sendLineMessage(
+    CONFIG.ADMIN_USER_ID,
+    [{
+      type: 'text',
+      text: '✅ メインBotテスト\n\n接続が正常です！\n\n' + formatDateTime(new Date())
+    }]
+  );
+
+  console.log('送信結果:', result ? '✅ 成功' : '❌ 失敗');
+}
+
+/**
+ * 管理者Bot送信テスト
+ * 【用途】管理者bot（承認/お断り用）への送信確認
+ */
+function testAdminBot() {
+  console.log('=== 管理者Bot送信テスト ===');
+
+  if (!CONFIG.ADMIN_BOT_TOKEN) {
+    console.error('❌ ADMIN_BOT_TOKENが設定されていません');
+    return;
+  }
+
+  if (!CONFIG.ADMIN_USER_ID) {
+    console.error('❌ ADMIN_USER_IDが設定されていません');
+    return;
+  }
+
+  const result = sendLineMessage(
+    CONFIG.ADMIN_USER_ID,
+    [{
+      type: 'text',
+      text: '✅ 管理者Botテスト\n\n接続が正常です！\n\n' + formatDateTime(new Date())
+    }],
+    CONFIG.ADMIN_BOT_TOKEN
+  );
+
+  console.log('送信結果:', result ? '✅ 成功' : '❌ 失敗');
+}
+
+/**
+ * 承認ボタンテスト
+ * 【用途】管理者botの承認/お断りボタンが正常に表示されるか確認
+ */
+function testApprovalButton() {
+  console.log('=== 承認ボタンテスト ===');
+
+  if (!CONFIG.ADMIN_BOT_TOKEN || !CONFIG.ADMIN_USER_ID) {
+    console.error('❌ 管理者bot設定が未完了です');
+    return;
+  }
+
+  const testRequestId = 'TEST' + Date.now();
+
+  const infoMessage = {
+    type: 'text',
+    text: `新規予約リクエスト（テスト）\n\n${testRequestId}\n\n2026-02-10 14:00\nテストコース(60分)\nテスト場所`
+  };
+
+  const actionMessage = {
+    type: 'template',
+    altText: '承認/お断りを選択',
+    template: {
+      type: 'confirm',
+      text: `この予約を受け付けますか？`,
+      actions: [
+        {
+          type: 'postback',
+          label: '受け付ける',
+          data: `approve_${testRequestId}`
+        },
+        {
+          type: 'postback',
+          label: 'お断りする',
+          data: `reject_${testRequestId}`
+        }
+      ]
+    }
+  };
+
+  const result1 = sendLineMessage(CONFIG.ADMIN_USER_ID, [infoMessage], CONFIG.ADMIN_BOT_TOKEN);
+  Utilities.sleep(500);
+  const result2 = sendLineMessage(CONFIG.ADMIN_USER_ID, [actionMessage], CONFIG.ADMIN_BOT_TOKEN);
+
+  if (result1 && result2) {
+    console.log('✅ 送信成功');
+    console.log('\n【確認】管理者botで承認/お断りボタンが表示されていますか？');
+  } else {
+    console.error('❌ 送信失敗');
+  }
+}
+
+/**
+ * フルテスト（予約作成→承認→追加情報→確定まで一気に実行）
+ * 【用途】システム全体の動作確認
+ */
+function testFullFlow() {
+  console.log('=== フルテスト開始 ===\n');
+  
+  // 1. 予約作成
+  console.log('【1/3】予約作成中...');
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(14, 0, 0, 0);
+  
+  const year = tomorrow.getFullYear();
+  const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const day = String(tomorrow.getDate()).padStart(2, '0');
+  const dateTimeStr = `${year}-${month}-${day} 14:00`;
+  
+  const requestId = generateRequestId();
+  const bookingData = {
+    requestId: requestId,
+    userId: CONFIG.ADMIN_USER_ID,
+    userName: 'テスト太郎',
+    desiredDateTime: dateTimeStr,
+    course: 'テストコース(60分)',
+    location: '愛知県テスト区',
+    status: '承認待ち',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  
+  saveBooking(requestId, bookingData);
+  console.log('✅ 予約作成完了:', requestId);
+  
+  // 2. 承認処理
+  console.log('\n【2/3】承認処理中...');
+  approveReservation(requestId, CONFIG.ADMIN_USER_ID);
+  console.log('✅ 承認完了');
+  
+  Utilities.sleep(1000);
+  
+  // 3. 追加情報入力
+  console.log('\n【3/3】追加情報入力シミュレート中...');
+  const testEvent = {
+    namedValues: {
+      '管理用 ID': [CONFIG.ADMIN_USER_ID],
+      '電話番号': ['090-1234-5678'],
+      '郵便番号': ['〒123-4567'],
+      'ご住所': ['愛知県名古屋市テスト区テスト町1-2-3']
+    },
+    range: {
+      getSheet: () => ({ getName: () => 'フォームの回答 2' })
+    }
+  };
+  
+  onFormSubmit(testEvent);
+  
+  console.log('\n=== テスト完了 ===');
+  console.log('\n【確認事項】');
+  console.log('1. メインbotに「予約が承認されました」→「予約が確定しました」と届いた');
+  console.log('2. 管理者botに「承認完了」→「予約確定」と届いた');
+  console.log('3. Googleカレンダーに登録された');
+  console.log('\n受付番号:', requestId);
+}
+
+/**
+ * フォームフィールド名確認
+ * 【用途】実際のGoogleフォームのフィールド名を確認（トラブルシューティング用）
+ */
+function checkFormFieldNames() {
+  console.log('=== フォームフィールド名確認 ===\n');
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  console.log('【初回予約フォーム（フォームの回答 1）】');
+  const sheet1 = ss.getSheetByName('フォームの回答 1');
+  if (sheet1 && sheet1.getLastRow() > 0) {
+    const headers = sheet1.getRange(1, 1, 1, sheet1.getLastColumn()).getValues()[0];
+    headers.forEach((header, index) => {
+      if (header) console.log(`  ${index + 1}. "${header}"`);
+    });
+  } else {
+    console.log('  回答なし');
+  }
+  
+  console.log('\n【承認後フォーム（フォームの回答 2）】');
+  const sheet2 = ss.getSheetByName('フォームの回答 2');
+  if (sheet2 && sheet2.getLastRow() > 0) {
+    const headers = sheet2.getRange(1, 1, 1, sheet2.getLastColumn()).getValues()[0];
+    headers.forEach((header, index) => {
+      if (header) console.log(`  ${index + 1}. "${header}"`);
+    });
+  } else {
+    console.log('  回答なし');
+  }
+  
+  console.log('\n=== 確認完了 ===');
+}
+
+/**
+ * 全予約確認
+ * 【用途】現在の予約状況を確認
+ */
+function viewAllBookings() {
+  console.log('=== 全予約一覧 ===\n');
+
+  const properties = PropertiesService.getScriptProperties();
+  const indexData = properties.getProperty('booking_index');
+
+  if (!indexData) {
+    console.log('予約がありません');
+    return;
+  }
+
+  const requestIds = JSON.parse(indexData);
+  console.log(`総予約数: ${requestIds.length}件\n`);
+
+  let statusCount = { '承認待ち': 0, '承認済み': 0, '確定': 0, 'お断り': 0 };
+
+  requestIds.forEach((requestId, index) => {
+    const booking = getBooking(requestId);
+    if (booking) {
+      console.log(`${index + 1}. [${booking.requestId}]`);
+      console.log(`   状態: ${booking.status}`);
+      console.log(`   名前: ${booking.userName || '（未設定）'}`);
+      console.log(`   日時: ${booking.desiredDateTime}`);
+      console.log(`   コース: ${booking.course}`);
+      console.log('');
+      statusCount[booking.status] = (statusCount[booking.status] || 0) + 1;
+    }
+  });
+
+  console.log('=== 状態別集計 ===');
+  console.log(`承認待ち: ${statusCount['承認待ち']}件`);
+  console.log(`承認済み: ${statusCount['承認済み']}件`);
+  console.log(`確定: ${statusCount['確定']}件`);
+  console.log(`お断り: ${statusCount['お断り']}件`);
+}
+
+/**
+ * エラーログ確認
+ * 【用途】システムエラーの確認
+ */
+function viewErrors() {
+  console.log('=== エラーログ（最新20件） ===\n');
+
+  const properties = PropertiesService.getScriptProperties();
+  const errorsData = properties.getProperty('errors');
+
+  if (!errorsData) {
+    console.log('エラーログがありません');
+    return;
+  }
+
+  const errors = JSON.parse(errorsData);
+  console.log(`総件数: ${errors.length}件\n`);
+
+  errors.slice(-20).forEach((error, index) => {
+    console.log(`${errors.length - 19 + index}. [${error.timestamp}]`);
+    console.log(`   ${error.action}`);
+    console.log(`   ${error.detail}`);
+    console.log('');
+  });
+}
+
+/**
+ * データ容量確認
+ * 【用途】PropertiesServiceの使用容量を確認
+ */
+function checkDataUsage() {
+  console.log('=== データ容量確認 ===\n');
+  checkDataSize();
+}
+
+/**
+ * テストカレンダーイベント削除
+ * 【用途】テスト実行後のカレンダークリーンアップ
+ */
+function deleteTestEvents() {
+  console.log('=== テストイベント削除 ===\n');
+  
+  let totalDeleted = 0;
+  
+  for (const calendarId of CONFIG.CALENDAR_IDS) {
+    console.log(`カレンダー: ${calendarId}`);
+    
+    try {
+      const calendar = CalendarApp.getCalendarById(calendarId);
+      if (!calendar) {
+        console.log('  ❌ アクセス不可');
+        continue;
+      }
+      
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 7);
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + 30);
+      
+      const events = calendar.getEvents(startDate, endDate);
+      let deletedCount = 0;
+      
+      for (const event of events) {
+        const title = event.getTitle();
+        if (title.includes('【予約】')) {
+          event.deleteEvent();
+          deletedCount++;
+          totalDeleted++;
+        }
+      }
+      
+      console.log(`  ${deletedCount}件削除`);
+      
+    } catch (error) {
+      console.error(`  エラー: ${error.message}`);
+    }
+  }
+  
+  console.log(`\n合計 ${totalDeleted}件 削除しました`);
+}
