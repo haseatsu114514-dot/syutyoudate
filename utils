@@ -1,0 +1,715 @@
+// ============================================
+// ユーティリティファイル - utils.gs
+// ============================================
+
+/**
+ * LINE メッセージ送信（リトライ機能付き・最適化版）
+ */
+function sendLineMessage(userId, messages, token = null) {
+  const startTime = Date.now();
+
+  // バリデーション
+  if (!userId || !messages || !Array.isArray(messages) || messages.length === 0) {
+    console.error('sendLineMessage: Invalid parameters');
+    return false;
+  }
+
+  if (messages.length > 5) {
+    console.error('メッセージ数が上限を超えています:', messages.length);
+    return false;
+  }
+
+  // 各メッセージの妥当性チェック
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
+    if (msg.type === 'text' && msg.text && msg.text.length > 5000) {
+      console.error(`メッセージ${i + 1}が長すぎます:`, msg.text.length, '文字');
+      return false;
+    }
+
+    if (msg.type === 'template' && msg.template && msg.template.type === 'buttons') {
+      if (msg.template.text && msg.template.text.length > 160) {
+        console.error(`Buttons template${i + 1}のテキストが長すぎます:`, msg.template.text.length, '文字');
+        return false;
+      }
+    }
+
+    if (msg.type === 'template' && msg.template && msg.template.type === 'confirm') {
+      if (msg.template.text && msg.template.text.length > 240) {
+        console.error(`Confirm template${i + 1}のテキストが長すぎます:`, msg.template.text.length, '文字');
+        return false;
+      }
+    }
+  }
+
+  const url = 'https://api.line.me/v2/bot/message/push';
+
+  const payload = {
+    to: userId,
+    messages: messages
+  };
+
+  const accessToken = token || CONFIG.LINE_CHANNEL_ACCESS_TOKEN;
+
+  if (!accessToken) {
+    console.error('アクセストークンが設定されていません');
+    return false;
+  }
+
+  const options = {
+    method: 'post',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  // リトライ処理付き送信
+  for (let attempt = 1; attempt <= CONFIG.RETRY_COUNT; attempt++) {
+    try {
+      console.log(`LINE送信試行 ${attempt}/${CONFIG.RETRY_COUNT}`);
+
+      const response = UrlFetchApp.fetch(url, options);
+      const responseCode = response.getResponseCode();
+
+      if (responseCode === 200) {
+        const duration = Date.now() - startTime;
+        console.log(`✅ LINE送信成功 (${duration}ms):`, userId);
+        return true;
+      } else if (responseCode === 429) {
+        console.warn(`⚠️ レート制限エラー（試行${attempt}）`);
+        if (attempt < CONFIG.RETRY_COUNT) {
+          const backoffTime = CONFIG.RETRY_DELAY_MS * attempt;
+          console.log(`待機中: ${backoffTime}ms`);
+          Utilities.sleep(backoffTime);
+          continue;
+        }
+      } else if (responseCode >= 500) {
+        console.warn(`⚠️ サーバーエラー ${responseCode}（試行${attempt}）`);
+        if (attempt < CONFIG.RETRY_COUNT) {
+          Utilities.sleep(CONFIG.RETRY_DELAY_MS);
+          continue;
+        }
+      } else {
+        const responseText = response.getContentText();
+        console.error('❌ LINE送信失敗:', responseCode, responseText);
+        logError('LINE送信失敗', `Code: ${responseCode}`);
+        return false;
+      }
+
+    } catch (error) {
+      console.error(`❌ LINE送信エラー（試行${attempt}）:`, error);
+
+      if (attempt < CONFIG.RETRY_COUNT) {
+        Utilities.sleep(CONFIG.RETRY_DELAY_MS);
+        continue;
+      } else {
+        logError('LINE送信エラー', error.toString());
+        return false;
+      }
+    }
+  }
+
+  const duration = Date.now() - startTime;
+  console.error(`❌ LINE送信失敗 (${duration}ms): ${CONFIG.RETRY_COUNT}回の試行後に失敗`);
+  logError('LINE送信失敗', `${CONFIG.RETRY_COUNT}回の試行後に失敗`);
+  return false;
+}
+
+/**
+ * 予約データ保存（容量チェック付き・最適化版）
+ */
+function saveBooking(requestId, bookingData) {
+  const startTime = Date.now();
+
+  try {
+    const properties = PropertiesService.getScriptProperties();
+
+    // データ容量チェック（10%の確率で実行）
+    if (Math.random() < CONFIG.DATA_SIZE_CHECK_PROBABILITY) {
+      checkDataSize();
+    }
+
+    const key = `booking_${requestId}`;
+    const dataJson = JSON.stringify(bookingData);
+
+    try {
+      properties.setProperty(key, dataJson);
+    } catch (saveError) {
+      console.error('⚠️ 保存エラー - 古いデータを削除して再試行:', saveError);
+
+      if (saveError.toString().includes('exceeded') ||
+          saveError.toString().includes('limit') ||
+          saveError.toString().includes('quota')) {
+        cleanupOldLogs();
+
+        try {
+          properties.setProperty(key, dataJson);
+        } catch (retryError) {
+          console.error('❌ 再試行も失敗:', retryError);
+          throw retryError;
+        }
+      } else {
+        throw saveError;
+      }
+    }
+
+    updateBookingIndex(requestId);
+
+    const duration = Date.now() - startTime;
+    console.log(`✅ 予約保存成功 (${duration}ms):`, requestId);
+
+    return true;
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`❌ saveBooking error (${duration}ms):`, error);
+    logError('予約保存エラー', error.toString());
+
+    try {
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(CONFIG.ADMIN_USER_ID, [{
+        type: 'text',
+        text: `緊急: 予約保存エラー\n\n受付番号: ${requestId}\n\nエラー: ${error.toString()}`
+      }], adminToken);
+    } catch (notifyError) {
+      console.error('管理者通知エラー:', notifyError);
+    }
+
+    return false;
+  }
+}
+
+/**
+ * 予約データ取得
+ */
+function getBooking(requestId) {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const key = `booking_${requestId}`;
+    const data = properties.getProperty(key);
+
+    return data ? JSON.parse(data) : null;
+
+  } catch (error) {
+    console.error('getBooking error:', error);
+    logError('予約取得エラー', error.toString());
+    return null;
+  }
+}
+
+/**
+ * ユーザーの予約一覧を取得
+ */
+function getUserBookings(userId) {
+  const startTime = Date.now();
+
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const indexData = properties.getProperty('booking_index');
+
+    if (!indexData) {
+      return [];
+    }
+
+    const requestIds = JSON.parse(indexData);
+    const userBookings = [];
+
+    requestIds.forEach(requestId => {
+      const booking = getBooking(requestId);
+      if (booking && booking.userId === userId) {
+        userBookings.push(booking);
+      }
+    });
+
+    userBookings.sort((a, b) => {
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    const duration = Date.now() - startTime;
+    console.log(`getUserBookings (${duration}ms): ${userBookings.length}件取得`);
+
+    return userBookings;
+
+  } catch (error) {
+    console.error('getUserBookings error:', error);
+    logError('ユーザー予約取得エラー', error.toString());
+    return [];
+  }
+}
+
+/**
+ * 予約インデックス更新
+ */
+function updateBookingIndex(requestId) {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const indexData = properties.getProperty('booking_index');
+
+    let requestIds = indexData ? JSON.parse(indexData) : [];
+
+    if (!requestIds.includes(requestId)) {
+      requestIds.push(requestId);
+      properties.setProperty('booking_index', JSON.stringify(requestIds));
+    }
+
+    return true;
+
+  } catch (error) {
+    console.error('updateBookingIndex error:', error);
+    return false;
+  }
+}
+
+/**
+ * userIdで最新の承認済み予約を検索（高速化版）
+ */
+function findLatestApprovedBookingByUserId(userId) {
+  const startTime = Date.now();
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    
+    // まずインデックスから予約IDリストを取得
+    const indexData = props.getProperty('booking_index');
+    if (!indexData) {
+      console.log('予約インデックスが見つかりません');
+      return null;
+    }
+
+    const requestIds = JSON.parse(indexData);
+    let latestBooking = null;
+    let latestTimestamp = 0;
+
+    // インデックスの予約IDを新しい順（逆順）でチェック
+    for (let i = requestIds.length - 1; i >= 0; i--) {
+      const requestId = requestIds[i];
+      const data = props.getProperty(`booking_${requestId}`);
+      
+      if (data) {
+        try {
+          const booking = JSON.parse(data);
+
+          // userId一致 && 承認済み && 追加情報未入力
+          if (booking.userId === userId &&
+              booking.status === '承認済み' &&
+              !booking.additionalInfo) {
+
+            const timestamp = new Date(
+              booking.approvedAt ||
+              booking.updatedAt ||
+              booking.createdAt
+            ).getTime();
+
+            if (timestamp > latestTimestamp) {
+              latestTimestamp = timestamp;
+              latestBooking = booking;
+            }
+          }
+        } catch (parseError) {
+          console.error('予約データのパースエラー:', requestId, parseError);
+        }
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`findLatestApprovedBookingByUserId (${duration}ms): ${latestBooking ? '見つかった' : '見つからない'}`);
+
+    return latestBooking;
+
+  } catch (error) {
+    console.error('findLatestApprovedBookingByUserId error:', error);
+    return null;
+  }
+}
+
+/**
+ * Googleカレンダーに予約追加（複数カレンダー対応・最大2つ）
+ */
+function addToCalendar(dateTimeStr, course, requestId, name) {
+  const startTime = Date.now();
+
+  try {
+    const calendarIds = CONFIG.CALENDAR_IDS.slice(0, 2);
+
+    if (!calendarIds || calendarIds.length === 0) {
+      console.error('カレンダーIDが設定されていません');
+      return false;
+    }
+
+    const reservationTime = new Date(dateTimeStr);
+
+    if (isNaN(reservationTime.getTime())) {
+      console.error('日時のパースに失敗:', dateTimeStr);
+      logError('カレンダーエラー', '日時パース失敗');
+      return false;
+    }
+
+    const courseConfig = CONFIG.COURSES[course];
+    if (!courseConfig) {
+      console.error('無効なコースが指定されました:', course);
+      logError('カレンダーエラー', '無効なコース');
+      return false;
+    }
+
+    const duration = courseConfig.duration || 60;
+    const bufferBefore = courseConfig.bufferBefore !== undefined ? courseConfig.bufferBefore : CONFIG.BUFFER_TIME;
+    const bufferAfter = courseConfig.bufferAfter !== undefined ? courseConfig.bufferAfter : CONFIG.BUFFER_TIME;
+
+    const bufferStartTime = new Date(reservationTime.getTime() - bufferBefore * 60 * 1000);
+    const bufferEndTime = new Date(reservationTime.getTime() + (duration + bufferAfter) * 60 * 1000);
+    const actualEndTime = new Date(reservationTime.getTime() + duration * 60 * 1000);
+
+    const totalMinutes = bufferBefore + duration + bufferAfter;
+
+    const formatTime = (date) => {
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      return `${hours}:${minutes}`;
+    };
+
+    const title = `【予約】${course} [${formatTime(bufferStartTime)}-${formatTime(bufferEndTime)}] 実施${formatTime(reservationTime)}-${formatTime(actualEndTime)}`;
+
+    const description = `受付番号: ${requestId}\n\n` +
+                        `【コース】${course}（施術${duration}分）\n\n` +
+                        `【時間詳細】\n` +
+                        `━━━━━━━━━━━━━━━━\n` +
+                        `▼ 開始（バッファ含む）\n  ${formatTime(bufferStartTime)} [前バッファ${bufferBefore}分]\n\n` +
+                        `▼ 施術開始\n  ${formatTime(reservationTime)}\n\n` +
+                        `▼ 施術終了\n  ${formatTime(actualEndTime)}\n\n` +
+                        `▼ 終了（バッファ含む）\n  ${formatTime(bufferEndTime)} [後バッファ${bufferAfter}分]\n` +
+                        `━━━━━━━━━━━━━━━━\n\n` +
+                        `【合計所要時間】\n${totalMinutes}分（施術${duration}分＋前バッファ${bufferBefore}分＋後バッファ${bufferAfter}分）`;
+
+    let successCount = 0;
+    let failedCalendars = [];
+
+    for (let i = 0; i < calendarIds.length; i++) {
+      const calendarId = calendarIds[i];
+
+      try {
+        console.log(`カレンダー${i + 1}/${calendarIds.length}に登録中: ${calendarId}`);
+
+        const calendar = CalendarApp.getCalendarById(calendarId);
+
+        if (!calendar) {
+          console.warn(`カレンダーが見つかりません: ${calendarId}`);
+          failedCalendars.push(calendarId);
+          continue;
+        }
+
+        calendar.createEvent(
+          title,
+          bufferStartTime,
+          bufferEndTime,
+          {
+            description: description
+          }
+        );
+
+        successCount++;
+        console.log(`✅ カレンダー${i + 1}登録成功: ${calendarId}`);
+
+      } catch (calendarError) {
+        console.error(`❌ カレンダー${i + 1}登録エラー:`, calendarError);
+        failedCalendars.push(calendarId);
+      }
+    }
+
+    const executionTime = Date.now() - startTime;
+
+    if (successCount === 0) {
+      console.error('全てのカレンダー登録に失敗しました');
+      logError('カレンダーエラー', '全登録失敗');
+      return false;
+    }
+
+    console.log(`✅ カレンダー登録完了 (${executionTime}ms): ${successCount}/${calendarIds.length}件成功`);
+    if (failedCalendars.length > 0) {
+      console.warn(`⚠️ 登録失敗: ${failedCalendars.join(', ')}`);
+    }
+
+    logAction('カレンダー登録', requestId, `${formatDateTime(bufferStartTime)} - ${formatDateTime(bufferEndTime)} (${successCount}/${calendarIds.length}件)`);
+
+    return true;
+
+  } catch (error) {
+    const executionTime = Date.now() - startTime;
+    console.error(`❌ addToCalendar error (${executionTime}ms):`, error);
+    logError('カレンダー追加エラー', error.toString());
+    return false;
+  }
+}
+
+/**
+ * アクションログ記録
+ */
+function logAction(action, userId, detail) {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const logsData = properties.getProperty('logs');
+
+    let logs = logsData ? JSON.parse(logsData) : [];
+
+    logs.push({
+      timestamp: new Date().toISOString(),
+      action: action,
+      userId: userId,
+      detail: detail
+    });
+
+    if (logs.length > CONFIG.MAX_LOGS) {
+      logs = logs.slice(-CONFIG.MAX_LOGS);
+    }
+
+    properties.setProperty('logs', JSON.stringify(logs));
+
+  } catch (error) {
+    console.error('logAction error:', error);
+  }
+}
+
+/**
+ * エラーログ記録
+ */
+function logError(action, detail) {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const errorsData = properties.getProperty('errors');
+
+    let errors = errorsData ? JSON.parse(errorsData) : [];
+
+    errors.push({
+      timestamp: new Date().toISOString(),
+      action: action,
+      detail: detail
+    });
+
+    if (errors.length > 100) {
+      errors = errors.slice(-100);
+    }
+
+    properties.setProperty('errors', JSON.stringify(errors));
+
+  } catch (error) {
+    console.error('logError error:', error);
+  }
+}
+
+/**
+ * データ容量監視（最適化版）
+ */
+function checkDataSize() {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const allData = properties.getProperties();
+
+    let totalSize = 0;
+    let bookingCount = 0;
+    let logSize = 0;
+    let errorLogSize = 0;
+
+    for (const key in allData) {
+      const itemSize = key.length + allData[key].length;
+      totalSize += itemSize;
+
+      if (key.startsWith('booking_')) {
+        bookingCount++;
+      } else if (key === 'logs') {
+        logSize = itemSize;
+      } else if (key === 'errors') {
+        errorLogSize = itemSize;
+      }
+    }
+
+    const totalKB = Math.round(totalSize / 1024);
+    const usagePercent = Math.round((totalSize / 500000) * 100);
+
+    console.log('=== データ容量レポート ===');
+    console.log(`総容量: ${totalKB} KB (${usagePercent}%)`);
+    console.log(`予約数: ${bookingCount}件`);
+    console.log(`ログ容量: ${Math.round(logSize / 1024)} KB`);
+    console.log(`エラーログ容量: ${Math.round(errorLogSize / 1024)} KB`);
+
+    if (totalSize > CONFIG.DATA_SIZE_WARNING_THRESHOLD) {
+      console.warn(`⚠️ データ容量が閾値を超えています: ${totalKB} KB`);
+
+      const lastWarningDate = properties.getProperty('last_capacity_warning');
+      const today = new Date().toDateString();
+
+      if (lastWarningDate !== today) {
+        const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+        sendLineMessage(CONFIG.ADMIN_USER_ID, [{
+          type: 'text',
+          text: `データ容量警告\n\n現在: ${totalKB} KB (${usagePercent}%)\n予約数: ${bookingCount}件\n\n古いデータの削除を推奨します`
+        }], adminToken);
+
+        properties.setProperty('last_capacity_warning', today);
+      }
+    }
+
+    return totalSize;
+
+  } catch (error) {
+    console.error('checkDataSize error:', error);
+    return 0;
+  }
+}
+
+/**
+ * 古いログのクリーンアップ（最適化版）
+ */
+function cleanupOldLogs() {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 古いデータのクリーンアップ開始 ===');
+
+    const properties = PropertiesService.getScriptProperties();
+    let deletedCount = 0;
+
+    // 1. ログを削減
+    const logsData = properties.getProperty('logs');
+    if (logsData) {
+      const logs = JSON.parse(logsData);
+      console.log(`現在のログ件数: ${logs.length}`);
+
+      if (logs.length > 500) {
+        const newLogs = logs.slice(-500);
+        properties.setProperty('logs', JSON.stringify(newLogs));
+        console.log(`✅ ログを削減: ${logs.length} → ${newLogs.length}`);
+      }
+    }
+
+    // 2. エラーログを削減
+    const errorsData = properties.getProperty('errors');
+    if (errorsData) {
+      const errors = JSON.parse(errorsData);
+      console.log(`現在のエラーログ件数: ${errors.length}`);
+
+      if (errors.length > 200) {
+        const newErrors = errors.slice(-200);
+        properties.setProperty('errors', JSON.stringify(newErrors));
+        console.log(`✅ エラーログを削減: ${errors.length} → ${newErrors.length}`);
+      }
+    }
+
+    // 3. 30日以前の完了した予約を削除
+    const indexData = properties.getProperty('booking_index');
+    if (indexData) {
+      const requestIds = JSON.parse(indexData);
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const remainingIds = [];
+
+      for (const requestId of requestIds) {
+        const booking = getBooking(requestId);
+        if (booking) {
+          const bookingDate = new Date(booking.desiredDateTime);
+
+          if (bookingDate < thirtyDaysAgo &&
+              (booking.status === '承認済み' || booking.status === 'お断り' || booking.status === '確定')) {
+            properties.deleteProperty(`booking_${requestId}`);
+            deletedCount++;
+          } else {
+            remainingIds.push(requestId);
+          }
+        } else {
+          remainingIds.push(requestId);
+        }
+      }
+
+      if (deletedCount > 0) {
+        properties.setProperty('booking_index', JSON.stringify(remainingIds));
+        console.log(`✅ 古い予約を削除: ${deletedCount}件`);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`=== クリーンアップ完了 (${duration}ms) ===`);
+
+    return deletedCount;
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`❌ cleanupOldLogs error (${duration}ms):`, error);
+    logError('クリーンアップエラー', error.toString());
+    return 0;
+  }
+}
+
+/**
+ * 自動メンテナンス（月次実行推奨）
+ * トリガー設定: 時間主導型 > 月タイマー > 毎月1日 > 午前2-3時
+ */
+function autoMaintenance() {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 自動メンテナンス開始 ===');
+    console.log('実行日時:', new Date().toLocaleString('ja-JP'));
+
+    // 1. データ容量チェック
+    const totalSize = checkDataSize();
+    const totalKB = Math.round(totalSize / 1024);
+    const usagePercent = Math.round((totalSize / 500000) * 100);
+
+    // 2. 古いデータをクリーンアップ
+    const deletedCount = cleanupOldLogs();
+
+    // 3. クリーンアップ後の容量チェック
+    const newTotalSize = checkDataSize();
+    const newTotalKB = Math.round(newTotalSize / 1024);
+    const newUsagePercent = Math.round((newTotalSize / 500000) * 100);
+
+    // 4. 管理者に通知
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+    
+    let message = `【自動メンテナンス完了】\n\n`;
+    message += `実行日時\n${new Date().toLocaleString('ja-JP')}\n\n`;
+    message += `━━━━━━━━━━━━━━\n`;
+    message += `削除した古い予約: ${deletedCount}件\n\n`;
+    message += `データ容量\n`;
+    message += `クリーンアップ前: ${totalKB} KB (${usagePercent}%)\n`;
+    message += `クリーンアップ後: ${newTotalKB} KB (${newUsagePercent}%)\n`;
+    message += `━━━━━━━━━━━━━━\n\n`;
+    
+    if (newUsagePercent >= 80) {
+      message += `⚠️ 容量が80%を超えています\n手動でのデータ整理を推奨します`;
+    } else if (newUsagePercent >= 60) {
+      message += `注意: 容量が60%を超えています`;
+    } else {
+      message += `容量に問題ありません`;
+    }
+
+    sendLineMessage(CONFIG.ADMIN_USER_ID, [{
+      type: 'text',
+      text: message
+    }], adminToken);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 自動メンテナンス完了 (${duration}ms) ===`);
+
+    logAction('自動メンテナンス', 'system', `削除: ${deletedCount}件, 容量: ${newTotalKB}KB (${newUsagePercent}%)`);
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`❌ autoMaintenance error (${duration}ms):`, error);
+    logError('自動メンテナンスエラー', error.toString());
+
+    // エラー通知
+    try {
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      sendLineMessage(CONFIG.ADMIN_USER_ID, [{
+        type: 'text',
+        text: `【自動メンテナンスエラー】\n\nエラーが発生しました\n\n${error.toString()}\n\n実行ログを確認してください`
+      }], adminToken);
+    } catch (notifyError) {
+      console.error('エラー通知失敗:', notifyError);
+    }
+  }
+}
