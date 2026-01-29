@@ -1,0 +1,307 @@
+// ============================================
+// 設定ファイル - config.gs
+// ============================================
+
+const CONFIG = {
+  // ============================================
+  // LINE Bot設定
+  // ============================================
+  LINE_CHANNEL_ACCESS_TOKEN: 'nK86scTJuSk6j3TtxQgVjugLVheRFlJq4p7E3G0RZtkYlBtdCsXR2TU2sc2quP2p/cIUNAXgUxq6v0QdZPAtI/TFuRHWhWxi8Yt75xJXp6/uZwkjvUxnkGLSVaUjQ1NRtdvjNis9UxWM78wyiD7XlgdB04t89/1O/w1cDnyilFU=',
+
+  ADMIN_BOT_TOKEN: 'MSFPendMUGGP9Lh1e9XyxNdmifIIIanpkFglXWqQD4izIM6hlXAzKaQTyI4VvpyPuvqcDH/FR0v5/UMO7VFDGwps7ylF2y4fPov8gNN++y7h+SWyXIQAf0cMPhOwt4m+l10bz1EagpxVM001732KQgdB04t89/1O/w1cDnyilFU=',
+
+  // ============================================
+  // ユーザーID設定
+  // ============================================
+  TEST_USER_ID: 'U00547541a1c6fa8f36af798811bfd67f',
+  ADMIN_USER_ID: 'U00547541a1c6fa8f36af798811bfd67f',
+
+  // ============================================
+  // カレンダー設定（最大2つまで登録可能）
+  // ============================================
+  CALENDAR_IDS: [
+    'primary',
+  ],
+
+  // 営業時間
+  BUSINESS_HOURS: {
+    START: 12,
+    END: 20
+  },
+
+  // ============================================
+  // コース設定
+  // ============================================
+  COURSES: {
+    'テストコース(60分)': {
+      duration: 60,
+      bufferBefore: 90,
+      bufferAfter: 90
+    },
+    'テストコース(90分)': {
+      duration: 90,
+      bufferBefore: 90,
+      bufferAfter: 90
+    }
+  },
+
+  BUFFER_TIME: 90,
+  BOOKING_DEADLINE_HOURS: 5,
+
+  // ============================================
+  // Google Forms設定
+  // ============================================
+  FORM: {
+    BOOKING: {
+      ID: '1FAIpQLSfSfjZuM6NXIEusCcV3PIESMXminb7DSP4_zIwPxsxqDPShQg',
+      USER_ID_ENTRY: 'entry.519567962'
+    },
+    APPROVED: {
+      ID: '1FAIpQLSfXp_ybSknT3T4JE-uELbh2-_61mHWLepDGGRhz9ieoIlYcLw',
+      USER_ID_ENTRY: 'entry.1592484096'
+    }
+  },
+
+  // リトライ設定
+  RETRY_COUNT: 3,
+  RETRY_DELAY_MS: 1500,
+
+  // ログ設定
+  MAX_LOGS: 1000,
+
+  // データ容量警告閾値
+  DATA_SIZE_WARNING_THRESHOLD: 400000,
+
+  // 処理タイムアウト設定
+  MAX_CALENDAR_CHECK_TIME_MS: 15000, // 15秒に短縮
+  MAX_SLOT_SUGGESTIONS: 3,
+
+  // データサイズチェックの頻度
+  DATA_SIZE_CHECK_PROBABILITY: 0.1
+};
+
+// ============================================
+// ヘルパー関数
+// ============================================
+
+/**
+ * 日時を YYYY-MM-DD HH:MM 形式にフォーマット
+ */
+function formatDateTime(date) {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+    return 'Invalid Date';
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+/**
+ * 受付番号を生成（例: REQ20240115143000）
+ */
+function generateRequestId() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+
+  return `REQ${year}${month}${day}${hours}${minutes}${seconds}`;
+}
+
+/**
+ * 処理時間を計測するユーティリティ
+ */
+function measureExecutionTime(functionName, fn) {
+  const startTime = Date.now();
+  try {
+    const result = fn();
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    console.log(`⏱️ ${functionName} 実行時間: ${duration}ms`);
+    return result;
+  } catch (error) {
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    console.error(`❌ ${functionName} エラー (実行時間: ${duration}ms):`, error);
+    throw error;
+  }
+}
+
+// ============================================
+// カレンダー空き時間チェック（軽量化版）
+// ============================================
+
+/**
+ * 複数カレンダーで指定時間が空いているかチェック（軽量化版）
+ */
+function checkAllCalendarsAvailability(reservationTime, course) {
+  const startCheckTime = Date.now();
+
+  try {
+    // 1. 基本チェック
+    if (!reservationTime || isNaN(reservationTime.getTime())) {
+      return { available: false, reason: '無効な日時が指定されました', suggestions: [] };
+    }
+
+    const now = new Date();
+    if (reservationTime <= now) {
+      return { available: false, reason: '過去の日時は指定できません', suggestions: [] };
+    }
+
+    // 2. 予約締切チェック
+    const deadlineTime = new Date(reservationTime.getTime() - CONFIG.BOOKING_DEADLINE_HOURS * 60 * 60 * 1000);
+    if (now > deadlineTime) {
+      return {
+        available: false,
+        reason: `予約は${CONFIG.BOOKING_DEADLINE_HOURS}時間前までにお願いします`,
+        suggestions: []
+      };
+    }
+
+    // 3. 営業時間チェック
+    const hour = reservationTime.getHours();
+    if (hour < CONFIG.BUSINESS_HOURS.START || hour >= CONFIG.BUSINESS_HOURS.END) {
+      return {
+        available: false,
+        reason: `営業時間は${CONFIG.BUSINESS_HOURS.START}:00〜${CONFIG.BUSINESS_HOURS.END}:00です`,
+        suggestions: []
+      };
+    }
+
+    // 4. コース情報の取得
+    const courseConfig = CONFIG.COURSES[course];
+    if (!courseConfig) {
+      return { available: false, reason: '無効なコースが指定されました', suggestions: [] };
+    }
+
+    const duration = courseConfig.duration || 60;
+    const bufferBefore = courseConfig.bufferBefore !== undefined ? courseConfig.bufferBefore : CONFIG.BUFFER_TIME;
+    const bufferAfter = courseConfig.bufferAfter !== undefined ? courseConfig.bufferAfter : CONFIG.BUFFER_TIME;
+
+    // 5. バッファ込みの時間範囲を計算
+    const bufferStartTime = new Date(reservationTime.getTime() - bufferBefore * 60 * 1000);
+    const bufferEndTime = new Date(reservationTime.getTime() + (duration + bufferAfter) * 60 * 1000);
+
+    // 6. 複数カレンダーをチェック（タイムアウト対策）
+    for (let i = 0; i < CONFIG.CALENDAR_IDS.length; i++) {
+      if (Date.now() - startCheckTime > CONFIG.MAX_CALENDAR_CHECK_TIME_MS) {
+        console.warn(`⚠️ カレンダーチェックがタイムアウト`);
+        return {
+          available: false,
+          reason: 'カレンダーの確認に時間がかかりすぎました',
+          suggestions: []
+        };
+      }
+
+      const calendarId = CONFIG.CALENDAR_IDS[i];
+
+      try {
+        const calendar = CalendarApp.getCalendarById(calendarId);
+        if (!calendar) continue;
+
+        const events = calendar.getEvents(bufferStartTime, bufferEndTime);
+
+        if (events.length > 0) {
+          // 空き時間提案を簡易的に生成（最大3つ）
+          const suggestions = findAvailableSlots(reservationTime, course);
+
+          return {
+            available: false,
+            reason: `指定の時間は既に予約が入っています`,
+            suggestions: suggestions
+          };
+        }
+
+      } catch (calendarError) {
+        console.error(`カレンダー${i + 1}のアクセスエラー:`, calendarError);
+      }
+    }
+
+    // 7. すべてのカレンダーで空きあり
+    return { available: true, reason: '', suggestions: [] };
+
+  } catch (error) {
+    console.error('checkAllCalendarsAvailability error:', error);
+    return {
+      available: false,
+      reason: 'カレンダーの確認中にエラーが発生しました',
+      suggestions: []
+    };
+  }
+}
+
+/**
+ * 空き時間を提案（軽量化版 - 最大3つまで）
+ */
+function findAvailableSlots(baseTime, course) {
+  const startFindTime = Date.now();
+  const suggestions = [];
+
+  try {
+    const date = new Date(baseTime);
+    date.setHours(CONFIG.BUSINESS_HOURS.START, 0, 0, 0);
+
+    const endOfDay = new Date(date);
+    endOfDay.setHours(CONFIG.BUSINESS_HOURS.END, 0, 0, 0);
+
+    let currentSlot = new Date(date);
+
+    // 30分刻みでチェック（最大3つ見つかるまで）
+    while (currentSlot < endOfDay && suggestions.length < CONFIG.MAX_SLOT_SUGGESTIONS) {
+      // タイムアウトチェック（3秒以上かかったら中断）
+      if (Date.now() - startFindTime > 3000) {
+        console.warn('空き時間検索がタイムアウト');
+        break;
+      }
+
+      const now = new Date();
+      const deadlineTime = new Date(currentSlot.getTime() - CONFIG.BOOKING_DEADLINE_HOURS * 60 * 60 * 1000);
+
+      if (currentSlot > now && now <= deadlineTime) {
+        if (isSlotAvailableQuick(currentSlot, course)) {
+          suggestions.push(formatDateTime(currentSlot));
+        }
+      }
+
+      currentSlot = new Date(currentSlot.getTime() + 30 * 60 * 1000);
+    }
+
+  } catch (error) {
+    console.error('findAvailableSlots error:', error);
+  }
+
+  return suggestions;
+}
+
+/**
+ * 簡易的な空き時間チェック
+ */
+function isSlotAvailableQuick(slotTime, course) {
+  try {
+    const courseConfig = CONFIG.COURSES[course];
+    const duration = courseConfig ? courseConfig.duration : 60;
+    const bufferBefore = courseConfig && courseConfig.bufferBefore !== undefined ? courseConfig.bufferBefore : CONFIG.BUFFER_TIME;
+    const bufferAfter = courseConfig && courseConfig.bufferAfter !== undefined ? courseConfig.bufferAfter : CONFIG.BUFFER_TIME;
+
+    const bufferStart = new Date(slotTime.getTime() - bufferBefore * 60 * 1000);
+    const bufferEnd = new Date(slotTime.getTime() + (duration + bufferAfter) * 60 * 1000);
+
+    // 最初のカレンダーのみチェック
+    const calendar = CalendarApp.getCalendarById(CONFIG.CALENDAR_IDS[0]);
+    if (!calendar) return false;
+
+    const events = calendar.getEvents(bufferStart, bufferEnd);
+    return events.length === 0;
+
+  } catch (error) {
+    return false;
+  }
+}
