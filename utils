@@ -447,12 +447,24 @@ function addToCalendar(dateTimeStr, course, requestId, name) {
 /**
  * アクションログ記録
  */
+/**
+ * アクションログ記録（軽量化版 - 最大50件）
+ */
 function logAction(action, userId, detail) {
   try {
     const properties = PropertiesService.getScriptProperties();
+    // 既存ログを取得せず、上書きする運用も検討すべきだが、
+    // ここでは件数を減らすことで対応
     const logsData = properties.getProperty('logs');
 
-    let logs = logsData ? JSON.parse(logsData) : [];
+    let logs = [];
+    if (logsData) {
+      try {
+        logs = JSON.parse(logsData);
+      } catch (e) {
+        logs = [];
+      }
+    }
 
     logs.push({
       timestamp: new Date().toISOString(),
@@ -461,8 +473,11 @@ function logAction(action, userId, detail) {
       detail: detail
     });
 
-    if (logs.length > CONFIG.MAX_LOGS) {
-      logs = logs.slice(-CONFIG.MAX_LOGS);
+    // 最新50件のみ保持（以前は1000件だったが重すぎるため削減）
+    // ※本格的なログはスプレッドシートへの移行を推奨
+    const MAX_LOGS_LITE = 50;
+    if (logs.length > MAX_LOGS_LITE) {
+      logs = logs.slice(-MAX_LOGS_LITE);
     }
 
     properties.setProperty('logs', JSON.stringify(logs));
@@ -475,12 +490,22 @@ function logAction(action, userId, detail) {
 /**
  * エラーログ記録
  */
+/**
+ * エラーログ記録（軽量化版 - 最大20件）
+ */
 function logError(action, detail) {
   try {
     const properties = PropertiesService.getScriptProperties();
     const errorsData = properties.getProperty('errors');
 
-    let errors = errorsData ? JSON.parse(errorsData) : [];
+    let errors = [];
+    if (errorsData) {
+      try {
+        errors = JSON.parse(errorsData);
+      } catch (e) {
+        errors = [];
+      }
+    }
 
     errors.push({
       timestamp: new Date().toISOString(),
@@ -488,8 +513,10 @@ function logError(action, detail) {
       detail: detail
     });
 
-    if (errors.length > 100) {
-      errors = errors.slice(-100);
+    // 最新20件のみ保持（軽量化）
+    const MAX_ERRORS_LITE = 20;
+    if (errors.length > MAX_ERRORS_LITE) {
+      errors = errors.slice(-MAX_ERRORS_LITE);
     }
 
     properties.setProperty('errors', JSON.stringify(errors));

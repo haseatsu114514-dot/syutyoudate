@@ -241,6 +241,9 @@ function checkAllCalendarsAvailability(reservationTime, course) {
 /**
  * 空き時間を提案（軽量化版 - 最大3つまで）
  */
+/**
+ * 空き時間を提案（高速化版 - 一括取得）
+ */
 function findAvailableSlots(baseTime, course) {
   const startFindTime = Date.now();
   const suggestions = [];
@@ -252,11 +255,25 @@ function findAvailableSlots(baseTime, course) {
     const endOfDay = new Date(date);
     endOfDay.setHours(CONFIG.BUSINESS_HOURS.END, 0, 0, 0);
 
+    // ★一括取得：検索対象範囲のイベントをまとめて取得（API呼び出し回数削減）
+    // 検索範囲：当日の開始時間 - 前バッファ(最大値想定:120分) 〜 終了時間 + 後バッファ + 施術時間
+    // マージンを大きめにとって1日分取得するのが最も効率的
+    const searchStart = new Date(date);
+    searchStart.setHours(0, 0, 0, 0);
+    const searchEnd = new Date(date);
+    searchEnd.setHours(23, 59, 59, 999);
+
+    const calendar = CalendarApp.getCalendarById(CONFIG.CALENDAR_IDS[0]);
+    if (!calendar) return [];
+
+    // 1日分のイベントを取得（これ1回で済ませる）
+    const dayEvents = calendar.getEvents(searchStart, searchEnd);
+    
     let currentSlot = new Date(date);
 
     // 30分刻みでチェック（最大3つ見つかるまで）
     while (currentSlot < endOfDay && suggestions.length < CONFIG.MAX_SLOT_SUGGESTIONS) {
-      // タイムアウトチェック（3秒以上かかったら中断）
+      // タイムアウトチェック（不要に近いが念のため）
       if (Date.now() - startFindTime > 3000) {
         console.warn('空き時間検索がタイムアウト');
         break;
@@ -266,7 +283,8 @@ function findAvailableSlots(baseTime, course) {
       const deadlineTime = new Date(currentSlot.getTime() - CONFIG.BOOKING_DEADLINE_HOURS * 60 * 60 * 1000);
 
       if (currentSlot > now && now <= deadlineTime) {
-        if (isSlotAvailableQuick(currentSlot, course)) {
+        // メモリ内チェック（APIを呼ばない）
+        if (isSlotAvailableOnMemory(currentSlot, course, dayEvents)) {
           suggestions.push(formatDateTime(currentSlot));
         }
       }
@@ -282,9 +300,9 @@ function findAvailableSlots(baseTime, course) {
 }
 
 /**
- * 簡易的な空き時間チェック
+ * メモリ上で空き時間をチェック（高速）
  */
-function isSlotAvailableQuick(slotTime, course) {
+function isSlotAvailableOnMemory(slotTime, course, events) {
   try {
     const courseConfig = CONFIG.COURSES[course];
     const duration = courseConfig ? courseConfig.duration : 60;
@@ -294,14 +312,20 @@ function isSlotAvailableQuick(slotTime, course) {
     const bufferStart = new Date(slotTime.getTime() - bufferBefore * 60 * 1000);
     const bufferEnd = new Date(slotTime.getTime() + (duration + bufferAfter) * 60 * 1000);
 
-    // 最初のカレンダーのみチェック
-    const calendar = CalendarApp.getCalendarById(CONFIG.CALENDAR_IDS[0]);
-    if (!calendar) return false;
-
-    const events = calendar.getEvents(bufferStart, bufferEnd);
-    return events.length === 0;
+    // イベント配列をループして重なりをチェック
+    for (const event of events) {
+      if (event.getStartTime() < bufferEnd && event.getEndTime() > bufferStart) {
+        return false; // 重なっている
+      }
+    }
+    return true;
 
   } catch (error) {
     return false;
   }
 }
+
+/**
+ * 簡易的な空き時間チェック
+ */
+// isSlotAvailableQuickは廃止（findAvailableSlots内でオンメモリ処理に変更）
