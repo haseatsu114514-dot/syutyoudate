@@ -85,65 +85,34 @@ function handleEvent(event) {
 }
 
 /**
- * テキストメッセージ処理
+ * テキストメッセージ処理（Reply API使用・無料）
  */
 function handleTextMessage(event) {
   const userId = event.source.userId;
   const text = event.message.text.trim();
+  const replyToken = event.replyToken;
 
   console.log('テキスト受信:', text);
-  logAction('テキスト受信', userId, text);
 
-  // ID確認コマンド
-  if (text === 'ID' || text === 'id' || text === 'ユーザーID' || text === 'マイID') {
-    const replyToken = event.replyToken;
-    
-    const url = 'https://api.line.me/v2/bot/message/reply';
-    
-    const payload = {
-      replyToken: replyToken,
-      messages: [{
-        type: 'text',
-        text: `あなたのユーザーID:\n${userId}\n\nこのIDをconfig.gsのADMIN_USER_IDに設定してください。`
-      }]
-    };
-    
-    let token = CONFIG.LINE_CHANNEL_ACCESS_TOKEN;
-    
-    const options = {
-      method: 'post',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    };
-    
-    let response = UrlFetchApp.fetch(url, options);
-    let responseCode = response.getResponseCode();
-    
-    if (responseCode !== 200) {
-      console.log('メインbotトークンで失敗、管理者botトークンで再試行');
-      token = CONFIG.ADMIN_BOT_TOKEN;
-      options.headers.Authorization = `Bearer ${token}`;
-      response = UrlFetchApp.fetch(url, options);
-      responseCode = response.getResponseCode();
-    }
-    
-    if (responseCode === 200) {
-      console.log('✅ ID返信成功:', userId);
-      logAction('ID確認', userId, userId);
-    } else {
-      console.error('❌ ID返信失敗:', response.getContentText());
-    }
-    
+  // replyTokenがない場合は処理しない
+  if (!replyToken) {
+    console.error('replyTokenがありません');
     return;
   }
 
+  let replyMessages = [];
+
+  // ID確認コマンド
+  if (text === 'ID' || text === 'id' || text === 'ユーザーID' || text === 'マイID') {
+    replyMessages = [{
+      type: 'text',
+      text: `あなたのユーザーID:\n${userId}`
+    }];
+    logAction('ID確認', userId, userId);
+  }
   // 予約開始
-  if (text === '予約' || text === 'よやく') {
-    const replyMessages = [{
+  else if (text === '予約' || text === 'よやく') {
+    replyMessages = [{
       type: 'template',
       altText: '予約フォーム',
       template: {
@@ -158,22 +127,38 @@ function handleTextMessage(event) {
         ]
       }
     }];
-    sendLineMessage(userId, replyMessages);
     logAction('予約開始', userId, '');
   }
   // 予約確認
   else if (text === '予約確認' || text === '予約一覧') {
-    showUserBookings(userId);
+    // 予約一覧はReply APIで返す
+    const bookings = getUserBookings(userId);
+    
+    if (!bookings || bookings.length === 0) {
+      replyMessages = [{
+        type: 'text',
+        text: '現在、予約はありません。'
+      }];
+    } else {
+      let message = '【予約一覧】\n';
+      bookings.slice(0, 3).forEach((booking, index) => {
+        message += `\n${index + 1}. ${booking.desiredDateTime}\n   ${booking.course} - ${booking.status}`;
+      });
+      if (bookings.length > 3) {
+        message += `\n\n他${bookings.length - 3}件`;
+      }
+      replyMessages = [{ type: 'text', text: message }];
+    }
+    logAction('予約確認', userId, `${bookings.length}件`);
   }
-  // その他のメッセージ
+  // その他 - 応答しない（メッセージ節約）
   else {
-    const replyMessages = [{
-      type: 'text',
-      text: '「予約」と送信すると予約できます\n\n予約確認は「予約確認」と送信してください'
-    }];
-
-    sendLineMessage(userId, replyMessages);
+    console.log('未対応キーワード - 応答スキップ:', text);
+    return; // 応答しない = メッセージ消費なし
   }
+
+  // Reply APIで返信（無料）
+  replyLineMessage(replyToken, replyMessages, CONFIG.LINE_CHANNEL_ACCESS_TOKEN);
 }
 
 /**
@@ -370,7 +355,7 @@ function approveReservation(requestId, adminUserId) {
       }
     };
 
-    sendLineMessage(booking.userId, [userMessage]);
+    sendLineMessage(booking.userId, [userMessage], CONFIG.ADMIN_BOT_TOKEN);
 
     // 管理者へ確認通知（簡潔版）
     const adminMessage = `承認完了\n\n受付番号\n${requestId}\n\n日時\n${booking.approvedDateTime}\n\nコース\n${booking.course}\n\n場所\n${booking.location}\n\nユーザーに追加情報フォームを送信しました`;
@@ -445,13 +430,13 @@ function rejectReservation(requestId, adminUserId) {
 
     console.log('お断り処理成功:', requestId);
 
-    // ユーザーへ通知
+    // ユーザーへ通知（管理botトークンで送信）
     const userMessage = `申し訳ございません\n\n以下の予約リクエストはお受けできませんでした\n\n受付番号\n${requestId}\n\n希望日時\n${booking.desiredDateTime}\n\nコース\n${booking.course}\n\n別の日時でお試しください`;
 
     sendLineMessage(booking.userId, [{
       type: 'text',
       text: userMessage
-    }]);
+    }], CONFIG.ADMIN_BOT_TOKEN);
 
     // 管理者へ確認通知
     const adminMessage = `お断り完了\n\n受付番号\n${requestId}\n\n日時\n${booking.desiredDateTime}\n\nコース\n${booking.course}\n\nユーザーに通知しました`;
@@ -558,7 +543,9 @@ function handleInitialFormSubmit(e) {
       
       const rejectionMessage = `申し訳ございません。\n\n${availability.reason}\n\n別の日時でお試しください。`;
       
-      const sent = sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }]);
+      // 管理botトークンで送信（メイン枠節約）
+      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+      const sent = sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }], adminToken);
       console.log('却下通知送信結果:', sent ? '成功' : '失敗');
       
       logAction('予約リクエスト却下', userId, desiredDateTime);
@@ -571,10 +558,11 @@ function handleInitialFormSubmit(e) {
     // カレンダーが空いている場合
     console.log('カレンダー空きあり - 予約リクエストを受け付け');
 
-    // ★1. ユーザーに即座に受付完了を通知（最優先）
+    // ★1. ユーザーに即座に受付完了を通知（管理botトークンで送信・メイン枠節約）
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
     const quickUserMessage = `予約リクエストを受け付けました\n\n${dateStr} ${desiredTime}\n${course}\n\n承認をお待ちください`;
     
-    const userSent = sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }]);
+    const userSent = sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }], adminToken);
     console.log('ユーザー通知送信結果:', userSent ? '成功' : '失敗');
 
     // ★2. 予約データ保存
@@ -685,7 +673,7 @@ function handleApprovedFormSubmit(e) {
     // Googleカレンダーに登録
     const calendarAdded = addToCalendar(booking.approvedDateTime, booking.course, booking.requestId, name);
 
-    // ★ ユーザーへ確定通知（住所を含む）
+    // ★ ユーザーへ確定通知（管理botトークンで送信）
     const userMessage = `ご予約が確定しました\n\n` +
                        `━━━━━━━━━━━━━━\n` +
                        `📅 日時\n${booking.approvedDateTime}\n\n` +
@@ -695,7 +683,7 @@ function handleApprovedFormSubmit(e) {
                        `${name} 様\n\n` +
                        `当日お伺いします\nご不明点はお気軽にお問い合わせください`;
 
-    sendLineMessage(userId, [{ type: 'text', text: userMessage }]);
+    sendLineMessage(userId, [{ type: 'text', text: userMessage }], CONFIG.ADMIN_BOT_TOKEN);
 
     // ★ 管理者への確定通知（住所を含む詳細版）
     const adminMessage = `✅ 予約確定\n\n` +
