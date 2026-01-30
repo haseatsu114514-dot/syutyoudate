@@ -557,11 +557,8 @@ function handleInitialFormSubmit(e) {
     // カレンダーが空いている場合
     console.log('カレンダー空きあり - 予約リクエストを受け付け');
 
-    // ★1. ユーザーに即座に受付完了を通知（メインbot）
-    const quickUserMessage = `予約リクエストを受け付けました\n\n${dateStr} ${desiredTime}\n${course}\n\n承認をお待ちください`;
-    
-    const userSent = sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }]);
-    console.log('ユーザー通知送信結果:', userSent ? '成功' : '失敗');
+    // ★ユーザー通知は省略（Googleフォーム完了画面で確認してもらう）
+    // → 1通節約 + 処理高速化
 
     // ★2. 予約データ保存
     saveBooking(requestId, {
