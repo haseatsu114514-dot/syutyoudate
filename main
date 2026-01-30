@@ -117,7 +117,7 @@ function handleTextMessage(event) {
       altText: '予約フォーム',
       template: {
         type: 'buttons',
-        text: '予約フォームを開きます',
+        text: '下記ボタンから予約フォームを開いてください\n\n※送信後、承認されるとLINEでお知らせします',
         actions: [
           {
             type: 'uri',
