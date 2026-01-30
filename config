@@ -140,6 +140,92 @@ function measureExecutionTime(functionName, fn) {
 // ============================================
 
 /**
+ * 高速カレンダーチェック（空きスロット提案なし・最速版）
+ * フォーム送信時の応答速度を優先
+ */
+function checkCalendarFast(reservationTime, course) {
+  const startCheckTime = Date.now();
+
+  try {
+    // 1. 基本チェック
+    if (!reservationTime || isNaN(reservationTime.getTime())) {
+      return { available: false, reason: '無効な日時が指定されました' };
+    }
+
+    const now = new Date();
+    if (reservationTime <= now) {
+      return { available: false, reason: '過去の日時は指定できません' };
+    }
+
+    // 2. 予約締切チェック
+    const deadlineTime = new Date(reservationTime.getTime() - CONFIG.BOOKING_DEADLINE_HOURS * 60 * 60 * 1000);
+    if (now > deadlineTime) {
+      return {
+        available: false,
+        reason: `予約は${CONFIG.BOOKING_DEADLINE_HOURS}時間前までにお願いします`
+      };
+    }
+
+    // 3. 営業時間チェック
+    const hour = reservationTime.getHours();
+    if (hour < CONFIG.BUSINESS_HOURS.START || hour >= CONFIG.BUSINESS_HOURS.END) {
+      return {
+        available: false,
+        reason: `営業時間は${CONFIG.BUSINESS_HOURS.START}:00〜${CONFIG.BUSINESS_HOURS.END}:00です`
+      };
+    }
+
+    // 4. コース情報の取得
+    const courseConfig = CONFIG.COURSES[course];
+    if (!courseConfig) {
+      return { available: false, reason: '無効なコースが指定されました' };
+    }
+
+    const duration = courseConfig.duration || 60;
+    const bufferBefore = courseConfig.bufferBefore !== undefined ? courseConfig.bufferBefore : CONFIG.BUFFER_TIME;
+    const bufferAfter = courseConfig.bufferAfter !== undefined ? courseConfig.bufferAfter : CONFIG.BUFFER_TIME;
+
+    // 5. バッファ込みの時間範囲を計算
+    const bufferStartTime = new Date(reservationTime.getTime() - bufferBefore * 60 * 1000);
+    const bufferEndTime = new Date(reservationTime.getTime() + (duration + bufferAfter) * 60 * 1000);
+
+    // 6. 最初のカレンダーのみチェック（高速化）
+    const calendarId = CONFIG.CALENDAR_IDS[0];
+    
+    try {
+      const calendar = CalendarApp.getCalendarById(calendarId);
+      if (!calendar) {
+        console.warn('カレンダーが見つかりません:', calendarId);
+        return { available: true, reason: '' }; // カレンダーがない場合は許可
+      }
+
+      const events = calendar.getEvents(bufferStartTime, bufferEndTime);
+      
+      const duration_ms = Date.now() - startCheckTime;
+      console.log(`カレンダーチェック完了 (${duration_ms}ms): ${events.length}件のイベント`);
+
+      if (events.length > 0) {
+        return {
+          available: false,
+          reason: '指定の時間は既に予約が入っています'
+        };
+      }
+
+    } catch (calendarError) {
+      console.error('カレンダーアクセスエラー:', calendarError);
+      // エラー時は許可（後で管理者が判断）
+      return { available: true, reason: '' };
+    }
+
+    return { available: true, reason: '' };
+
+  } catch (error) {
+    console.error('checkCalendarFast error:', error);
+    return { available: true, reason: '' }; // エラー時は許可
+  }
+}
+
+/**
  * 複数カレンダーで指定時間が空いているかチェック（軽量化版）
  */
 function checkAllCalendarsAvailability(reservationTime, course) {

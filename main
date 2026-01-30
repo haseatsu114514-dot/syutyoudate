@@ -503,7 +503,7 @@ function onFormSubmit(e) {
 }
 
 /**
- * 初回予約フォーム送信処理（高速化版・カレンダーチェック優先）
+ * 初回予約フォーム送信処理（超高速版・ユーザー通知最優先）
  */
 function handleInitialFormSubmit(e) {
   const startTime = Date.now();
@@ -520,8 +520,10 @@ function handleInitialFormSubmit(e) {
     const course = data['コース'] ? data['コース'][0] : null;
     const location = data['出張場所'] ? data['出張場所'][0] : null;
 
+    console.log('受信データ - userId:', userId, 'date:', desiredDate, 'time:', desiredTime);
+
     if (!userId || !desiredDate || !desiredTime || !course || !location) {
-      console.error('必須項目不足');
+      console.error('必須項目不足 - userId:', userId, 'date:', desiredDate, 'time:', desiredTime, 'course:', course, 'location:', location);
       return;
     }
 
@@ -535,41 +537,33 @@ function handleInitialFormSubmit(e) {
     const desiredDateTime = `${dateStr} ${desiredTime}`;
     const requestId = generateRequestId();
 
-    // ★★★ カレンダー空きチェックを最優先で実行 ★★★
-    const availability = checkAllCalendarsAvailability(new Date(desiredDateTime), course);
+    // ★★★ 高速カレンダーチェック（空きスロット提案なし）★★★
+    const availability = checkCalendarFast(new Date(desiredDateTime), course);
 
-    // 既に予約が入っている場合は処理を中断
+    // 既に予約が入っている場合
     if (!availability.available) {
-      console.log('カレンダーに予約あり - リクエストを受け付けません');
+      console.log('カレンダーに予約あり - 却下');
       
-      let rejectionMessage = `申し訳ございません。指定の時間は既に予約が入っています。\n\n再度別の時間でリクエストをいただけますと幸いです。`;
+      const rejectionMessage = `申し訳ございません。\n\n${availability.reason}\n\n別の日時でお試しください。`;
       
-      if (availability.suggestions && availability.suggestions.length > 0) {
-        rejectionMessage += '\n\n【空いている時間帯】';
-        availability.suggestions.forEach((slot, index) => {
-          rejectionMessage += `\n${index + 1}. ${slot}`;
-        });
-      }
+      const sent = sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }]);
+      console.log('却下通知送信結果:', sent ? '成功' : '失敗');
       
-      sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }]);
-      
-      logAction('予約リクエスト却下（カレンダー重複）', userId, desiredDateTime);
+      logAction('予約リクエスト却下', userId, desiredDateTime);
       
       const duration = Date.now() - startTime;
       console.log(`=== カレンダー重複のため処理終了 (${duration}ms) ===`);
       return;
     }
 
-    // カレンダーが空いている場合のみ以降の処理を実行
-    console.log('カレンダー空きあり - 予約リクエストを受け付けます');
+    // カレンダーが空いている場合
+    console.log('カレンダー空きあり - 予約リクエストを受け付け');
 
-    // ★1. ユーザーに即座に受付完了を通知
-    const quickUserMessage = `予約リクエストを受け付けました\n\n` +
-                            `${dateStr} ${desiredTime}\n` +
-                            `${course}\n\n` +
-                            `承認をお待ちください\n` +
-                            `(承認後、追加情報の入力をお願いします)`;
-    sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }]);
+    // ★1. ユーザーに即座に受付完了を通知（最優先）
+    const quickUserMessage = `予約リクエストを受け付けました\n\n${dateStr} ${desiredTime}\n${course}\n\n承認をお待ちください`;
+    
+    const userSent = sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }]);
+    console.log('ユーザー通知送信結果:', userSent ? '成功' : '失敗');
 
     // ★2. 予約データ保存
     saveBooking(requestId, {
@@ -584,37 +578,38 @@ function handleInitialFormSubmit(e) {
       updatedAt: new Date().toISOString()
     });
 
-    // ★3. 管理者への通知
+    // ★3. 管理者への通知（1回のAPIコールに統合）
     const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
 
-    const adminInfoMessage = {
-      type: 'text',
-      text: `新規予約リクエスト\n\n${name} 様\n${dateStr} ${desiredTime}\n${course}\n${location}`
-    };
-
-    const adminActionMessage = {
-      type: 'template',
-      altText: '予約の確認',
-      template: {
-        type: 'confirm',
-        text: `この予約を受け付けますか？`,
-        actions: [
-          {
-            type: 'postback',
-            label: '受け付ける',
-            data: `approve_${requestId}`
-          },
-          {
-            type: 'postback',
-            label: 'お断りする',
-            data: `reject_${requestId}`
-          }
-        ]
+    const adminMessages = [
+      {
+        type: 'text',
+        text: `新規予約リクエスト\n\n${name} 様\n${dateStr} ${desiredTime}\n${course}\n${location}`
+      },
+      {
+        type: 'template',
+        altText: '予約の確認',
+        template: {
+          type: 'confirm',
+          text: `この予約を受け付けますか？`,
+          actions: [
+            {
+              type: 'postback',
+              label: '受け付ける',
+              data: `approve_${requestId}`
+            },
+            {
+              type: 'postback',
+              label: 'お断りする',
+              data: `reject_${requestId}`
+            }
+          ]
+        }
       }
-    };
+    ];
 
-    sendLineMessage(CONFIG.ADMIN_USER_ID, [adminInfoMessage], adminToken);
-    sendLineMessage(CONFIG.ADMIN_USER_ID, [adminActionMessage], adminToken);
+    const adminSent = sendLineMessage(CONFIG.ADMIN_USER_ID, adminMessages, adminToken);
+    console.log('管理者通知送信結果:', adminSent ? '成功' : '失敗');
 
     logAction('予約リクエスト受信', userId, requestId);
 
