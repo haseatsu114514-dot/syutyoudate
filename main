@@ -355,7 +355,7 @@ function approveReservation(requestId, adminUserId) {
       }
     };
 
-    sendLineMessage(booking.userId, [userMessage], CONFIG.ADMIN_BOT_TOKEN);
+    sendLineMessage(booking.userId, [userMessage]);
 
     // 管理者へ確認通知（簡潔版）
     const adminMessage = `承認完了\n\n受付番号\n${requestId}\n\n日時\n${booking.approvedDateTime}\n\nコース\n${booking.course}\n\n場所\n${booking.location}\n\nユーザーに追加情報フォームを送信しました`;
@@ -436,7 +436,7 @@ function rejectReservation(requestId, adminUserId) {
     sendLineMessage(booking.userId, [{
       type: 'text',
       text: userMessage
-    }], CONFIG.ADMIN_BOT_TOKEN);
+    }]);
 
     // 管理者へ確認通知
     const adminMessage = `お断り完了\n\n受付番号\n${requestId}\n\n日時\n${booking.desiredDateTime}\n\nコース\n${booking.course}\n\nユーザーに通知しました`;
@@ -543,9 +543,8 @@ function handleInitialFormSubmit(e) {
       
       const rejectionMessage = `申し訳ございません。\n\n${availability.reason}\n\n別の日時でお試しください。`;
       
-      // 管理botトークンで送信（メイン枠節約）
-      const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
-      const sent = sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }], adminToken);
+      // メインbotで送信
+      const sent = sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }]);
       console.log('却下通知送信結果:', sent ? '成功' : '失敗');
       
       logAction('予約リクエスト却下', userId, desiredDateTime);
@@ -558,11 +557,10 @@ function handleInitialFormSubmit(e) {
     // カレンダーが空いている場合
     console.log('カレンダー空きあり - 予約リクエストを受け付け');
 
-    // ★1. ユーザーに即座に受付完了を通知（管理botトークンで送信・メイン枠節約）
-    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+    // ★1. ユーザーに即座に受付完了を通知（メインbot）
     const quickUserMessage = `予約リクエストを受け付けました\n\n${dateStr} ${desiredTime}\n${course}\n\n承認をお待ちください`;
     
-    const userSent = sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }], adminToken);
+    const userSent = sendLineMessage(userId, [{ type: 'text', text: quickUserMessage }]);
     console.log('ユーザー通知送信結果:', userSent ? '成功' : '失敗');
 
     // ★2. 予約データ保存
@@ -683,7 +681,7 @@ function handleApprovedFormSubmit(e) {
                        `${name} 様\n\n` +
                        `当日お伺いします\nご不明点はお気軽にお問い合わせください`;
 
-    sendLineMessage(userId, [{ type: 'text', text: userMessage }], CONFIG.ADMIN_BOT_TOKEN);
+    sendLineMessage(userId, [{ type: 'text', text: userMessage }]);
 
     // ★ 管理者への確定通知（住所を含む詳細版）
     const adminMessage = `✅ 予約確定\n\n` +
