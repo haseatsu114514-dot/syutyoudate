@@ -3,6 +3,18 @@
 // ============================================
 
 /**
+ * GETリクエスト処理（ヘルスチェック・Webhook検証用）
+ */
+function doGet(e) {
+  console.log('=== doGet受信 ===');
+  return ContentService.createTextOutput(JSON.stringify({ 
+    status: 'ok', 
+    message: 'LINE Bot is running',
+    timestamp: new Date().toISOString()
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
  * Webhook受信処理（LINE Messaging API）
  */
 function doPost(e) {
