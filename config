@@ -62,9 +62,9 @@ const CONFIG = {
     }
   },
 
-  // リトライ設定
-  RETRY_COUNT: 3,
-  RETRY_DELAY_MS: 1500,
+  // リトライ設定（最適化済み）
+  RETRY_COUNT: 2,
+  RETRY_DELAY_MS: 1000,
 
   // ログ設定
   MAX_LOGS: 1000,
@@ -72,9 +72,9 @@ const CONFIG = {
   // データ容量警告閾値
   DATA_SIZE_WARNING_THRESHOLD: 400000,
 
-  // 処理タイムアウト設定
-  MAX_CALENDAR_CHECK_TIME_MS: 15000, // 15秒に短縮
-  MAX_SLOT_SUGGESTIONS: 3,
+  // 処理タイムアウト設定（最適化済み）
+  MAX_CALENDAR_CHECK_TIME_MS: 10000, // 10秒に短縮
+  MAX_SLOT_SUGGESTIONS: 2, // 提案数を削減して高速化
 
   // データサイズチェックの頻度
   DATA_SIZE_CHECK_PROBABILITY: 0.1
@@ -273,8 +273,8 @@ function findAvailableSlots(baseTime, course) {
 
     // 30分刻みでチェック（最大3つ見つかるまで）
     while (currentSlot < endOfDay && suggestions.length < CONFIG.MAX_SLOT_SUGGESTIONS) {
-      // タイムアウトチェック（不要に近いが念のため）
-      if (Date.now() - startFindTime > 3000) {
+      // タイムアウトチェック（高速化のため2秒に短縮）
+      if (Date.now() - startFindTime > 2000) {
         console.warn('空き時間検索がタイムアウト');
         break;
       }

@@ -614,7 +614,6 @@ function handleInitialFormSubmit(e) {
     };
 
     sendLineMessage(CONFIG.ADMIN_USER_ID, [adminInfoMessage], adminToken);
-    Utilities.sleep(300);
     sendLineMessage(CONFIG.ADMIN_USER_ID, [adminActionMessage], adminToken);
 
     logAction('予約リクエスト受信', userId, requestId);
