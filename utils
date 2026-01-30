@@ -3,14 +3,21 @@
 // ============================================
 
 /**
- * LINE メッセージ送信（リトライ機能付き・最適化版）
+ * LINE メッセージ送信（リトライ機能付き・デバッグ強化版）
  */
 function sendLineMessage(userId, messages, token = null) {
   const startTime = Date.now();
 
+  // デバッグ: 送信パラメータを詳細にログ出力
+  console.log('=== sendLineMessage 開始 ===');
+  console.log('宛先userId:', userId);
+  console.log('使用トークン:', token ? 'カスタム(管理bot)' : 'デフォルト(メインbot)');
+  console.log('メッセージ数:', messages ? messages.length : 0);
+
   // バリデーション
   if (!userId || !messages || !Array.isArray(messages) || messages.length === 0) {
     console.error('sendLineMessage: Invalid parameters');
+    console.error('userId:', userId, 'messages:', JSON.stringify(messages));
     return false;
   }
 
@@ -78,6 +85,7 @@ function sendLineMessage(userId, messages, token = null) {
       if (responseCode === 200) {
         const duration = Date.now() - startTime;
         console.log(`✅ LINE送信成功 (${duration}ms):`, userId);
+        console.log('送信先:', userId, '使用トークン:', token ? '管理bot' : 'メインbot');
         return true;
       } else if (responseCode === 429) {
         console.warn(`⚠️ レート制限エラー（試行${attempt}）`);
@@ -96,7 +104,9 @@ function sendLineMessage(userId, messages, token = null) {
       } else {
         const responseText = response.getContentText();
         console.error('❌ LINE送信失敗:', responseCode, responseText);
-        logError('LINE送信失敗', `Code: ${responseCode}`);
+        console.error('失敗詳細 - 宛先:', userId, '使用トークン:', token ? '管理bot' : 'メインbot');
+        console.error('レスポンス内容:', responseText);
+        logError('LINE送信失敗', `Code: ${responseCode}, User: ${userId}, Token: ${token ? '管理bot' : 'メインbot'}, Response: ${responseText}`);
         return false;
       }
 
