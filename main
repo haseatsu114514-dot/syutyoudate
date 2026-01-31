@@ -111,7 +111,7 @@ function handleTextMessage(event) {
     logAction('ID確認', userId, userId);
   }
   // 予約開始
-  else if (text === '予約' || text === 'よやく') {
+  else if ((text.includes('予約') || text.includes('よやく')) && !text.includes('確認') && !text.includes('一覧')) {
     replyMessages = [{
       type: 'template',
       altText: '予約フォーム',
@@ -660,17 +660,22 @@ function handleInitialFormSubmit(e) {
 
     const data = e.namedValues;
 
+    // ヘルパ関数: 値を安全に取得（undefined/null/空文字の場合はデフォルト値を返す）
+    const getValue = (key, defaultVal = '') => {
+      return (data[key] && data[key][0]) ? data[key][0] : defaultVal;
+    };
+
     // 基本情報
-    const userId = data['管理用ID(⚠️変更を加えないでください)'] ? data['管理用ID(⚠️変更を加えないでください)'][0] : null;
-    const name = data['お名前'] ? data['お名前'][0] : '（未入力）';
-    const desiredDate = data['希望日'] ? data['希望日'][0] : null;
-    const desiredTime = data['希望時刻'] ? data['希望時刻'][0] : null;
-    const course = data['コース'] ? data['コース'][0] : null;
+    const userId = getValue('管理用ID(⚠️変更を加えないでください)', null);
+    const name = getValue('お名前', '（未入力）');
+    const desiredDate = getValue('希望日', null);
+    const desiredTime = getValue('希望時刻', null);
+    const course = getValue('コース', null);
 
     // 連絡先情報
-    const phone = data['電話番号'] ? data['電話番号'][0] : null;
-    const postalCode = data['郵便番号'] ? data['郵便番号'][0] : '';
-    const address = data['ご住所'] ? data['ご住所'][0] : null;
+    const phone = getValue('電話番号', '未入力');
+    const postalCode = getValue('郵便番号', '');
+    const address = getValue('ご住所', '未入力');
 
     console.log('受信データ - userId:', userId, 'date:', desiredDate, 'time:', desiredTime);
     console.log('連絡先情報 - phone:', phone ? '入力あり' : 'なし', 'address:', address ? '入力あり' : 'なし');
