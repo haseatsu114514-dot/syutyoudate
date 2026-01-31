@@ -377,3 +377,70 @@ function deleteTestEvents() {
   
   console.log(`\n合計 ${totalDeleted}件 削除しました`);
 }
+
+/**
+ * リアル・3ステップテスト (10秒間隔)
+ * 【用途】本番環境と同じ「フォーム送信 → (待機) → 承認」の流れをテスト
+ */
+function testReal3StepFlow() {
+  console.log('=== リアル・3ステップテスト開始 (間隔: 10秒) ===\n');
+
+  // 日時決定 (明日15:00)
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(15, 0, 0, 0);
+  
+  const year = tomorrow.getFullYear();
+  const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const day = String(tomorrow.getDate()).padStart(2, '0');
+  const dateTimeStr = `${year}-${month}-${day} 15:00`;
+
+  // 1. フォーム送信（新規予約）
+  console.log('【1/2】お客様がフォームを送信します...');
+  console.log('       (送信後、自動で「承りました」通知が届くはずです)');
+  
+  const testEvent = {
+    namedValues: {
+      '管理用ID(⚠️変更を加えないでください)': [CONFIG.ADMIN_USER_ID],
+      'お名前': ['リアルテスト二郎'],
+      '希望日': [dateTimeStr.split(' ')[0]],
+      '希望時刻': ['15:00'],
+      'コース': ['テストコース(60分)'],
+      '電話番号': ['080-9876-5432'],
+      '郵便番号': ['〒999-0000'],
+      'ご住所': ['リアルテスト市実験区サンプル町9-9']
+    },
+    range: {
+      getSheet: () => ({ getName: () => 'フォームの回答 1' }) // フォーム1 (初回予約)
+    }
+  };
+
+  onFormSubmit(testEvent);
+  console.log('✅ フォーム送信完了');
+
+  console.log('\n⏳ 10秒待機中... (管理者が通知を確認している時間をシミュレート)');
+  Utilities.sleep(10000); 
+
+  // 2. 管理者承認
+  console.log('\n【2/2】管理者が「受け付ける」ボタンを押します...');
+  
+  // 最新の予約IDを取得
+  const bookings = getUserBookings(CONFIG.ADMIN_USER_ID);
+  if (!bookings || bookings.length === 0) {
+    console.error('❌ 予約が見つかりません。ステップ1で失敗している可能性があります。');
+    return;
+  }
+  const latestBooking = bookings[0]; // 先頭が最新
+  console.log(`対象予約ID: ${latestBooking.requestId}`);
+
+  approveReservation(latestBooking.requestId, CONFIG.ADMIN_USER_ID);
+  console.log('✅ 承認完了');
+
+  console.log('\n=== テスト完了 ===');
+  console.log('ご自身のLINEで、以下の通知が順番に来ているか確認してください。');
+  console.log('1. [お客様]「ご予約リクエストを承りました...」 (Step 1後すぐ)');
+  console.log('2. [管理者]「新規予約リクエスト...」 (Step 1後すぐ)');
+  console.log('   --- 10秒後 ---');
+  console.log('3. [お客様]「ご予約が確定しました！」 (Step 2後)');
+  console.log('4. [管理者]「予約確定」 (Step 2後)');
+}
