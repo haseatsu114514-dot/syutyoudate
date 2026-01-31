@@ -679,18 +679,53 @@ function handleInitialFormSubmit(e) {
       return;
     }
 
-    // 日付フォーマットの整形
+    // 日付フォーマットの整形（ドロップダウン "2/1(日)" 形式に対応）
     let dateStr = desiredDate;
+    let reservationDate;
+
     if (desiredDate instanceof Date || typeof desiredDate === 'object') {
-      const d = new Date(desiredDate);
-      dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      reservationDate = new Date(desiredDate);
+      dateStr = `${reservationDate.getFullYear()}-${String(reservationDate.getMonth() + 1).padStart(2, '0')}-${String(reservationDate.getDate()).padStart(2, '0')}`;
+    } else {
+      // "2026/2/1(土)" または "2/1(日)" 形式をパース
+      const dateMatchWithYear = desiredDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+      const dateMatchNoYear = desiredDate.match(/^(\d{1,2})\/(\d{1,2})/);
+
+      if (dateMatchWithYear) {
+        // 年あり形式: "2026/2/1(土)"
+        const year = parseInt(dateMatchWithYear[1], 10);
+        const month = parseInt(dateMatchWithYear[2], 10);
+        const day = parseInt(dateMatchWithYear[3], 10);
+        reservationDate = new Date(year, month - 1, day);
+        dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } else if (dateMatchNoYear) {
+        // 年なし形式: "2/1(日)" （後方互換性）
+        const month = parseInt(dateMatchNoYear[1], 10);
+        const day = parseInt(dateMatchNoYear[2], 10);
+        const year = new Date().getFullYear();
+        const currentMonth = new Date().getMonth() + 1;
+        const actualYear = (month < currentMonth && currentMonth >= 11) ? year + 1 : year;
+        reservationDate = new Date(actualYear, month - 1, day);
+        dateStr = `${actualYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } else {
+        // パースできない場合はそのまま
+        reservationDate = new Date(desiredDate);
+      }
+    }
+
+    // 時刻を追加
+    const timeMatch = desiredTime.match(/(\d{1,2}):(\d{2})/);
+    if (timeMatch && reservationDate) {
+      reservationDate.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), 0, 0);
     }
 
     const desiredDateTime = `${dateStr} ${desiredTime}`;
     const requestId = generateRequestId();
 
+    console.log('パース結果 - dateStr:', dateStr, 'reservationDate:', reservationDate);
+
     // ★★★ 高速カレンダーチェック ★★★
-    const availability = checkCalendarFast(new Date(desiredDateTime), course);
+    const availability = checkCalendarFast(reservationDate, course);
 
     // 既に予約が入っている場合 → クイックリプライで空き時間を提案
     if (!availability.available) {
@@ -714,7 +749,7 @@ function handleInitialFormSubmit(e) {
       saveBooking(requestId, tempBookingData);
 
       // 空き時間を取得
-      const suggestions = findAvailableSlots(new Date(desiredDateTime), course);
+      const suggestions = findAvailableSlots(reservationDate, course);
 
       if (suggestions.length > 0) {
         // クイックリプライで空き時間を提案
