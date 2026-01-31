@@ -177,6 +177,9 @@ function testFullFlow() {
     desiredDateTime: dateTimeStr,
     course: 'テストコース(60分)',
     location: '愛知県テスト区',
+    phone: '090-1234-5678',
+    postalCode: '〒123-4567',
+    address: '愛知県テスト区テスト町1-2-3',
     status: '承認待ち',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
