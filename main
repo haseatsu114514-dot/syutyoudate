@@ -687,13 +687,22 @@ function handleInitialFormSubmit(e) {
       reservationDate = new Date(desiredDate);
       dateStr = `${reservationDate.getFullYear()}-${String(reservationDate.getMonth() + 1).padStart(2, '0')}-${String(reservationDate.getDate()).padStart(2, '0')}`;
     } else {
-      // "2/1(日)" 形式をパース
-      const dateMatch = desiredDate.match(/^(\d{1,2})\/(\d{1,2})/);
-      if (dateMatch) {
-        const month = parseInt(dateMatch[1], 10);
-        const day = parseInt(dateMatch[2], 10);
+      // "2026/2/1(土)" または "2/1(日)" 形式をパース
+      const dateMatchWithYear = desiredDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+      const dateMatchNoYear = desiredDate.match(/^(\d{1,2})\/(\d{1,2})/);
+
+      if (dateMatchWithYear) {
+        // 年あり形式: "2026/2/1(土)"
+        const year = parseInt(dateMatchWithYear[1], 10);
+        const month = parseInt(dateMatchWithYear[2], 10);
+        const day = parseInt(dateMatchWithYear[3], 10);
+        reservationDate = new Date(year, month - 1, day);
+        dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } else if (dateMatchNoYear) {
+        // 年なし形式: "2/1(日)" （後方互換性）
+        const month = parseInt(dateMatchNoYear[1], 10);
+        const day = parseInt(dateMatchNoYear[2], 10);
         const year = new Date().getFullYear();
-        // 1月に12月の日付が来た場合は翌年として扱う
         const currentMonth = new Date().getMonth() + 1;
         const actualYear = (month < currentMonth && currentMonth >= 11) ? year + 1 : year;
         reservationDate = new Date(actualYear, month - 1, day);

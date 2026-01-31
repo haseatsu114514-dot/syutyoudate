@@ -879,10 +879,12 @@ function getAvailableDates(days) {
       // より正確には、各時間帯をチェックする必要があるが、パフォーマンスのため簡易化
       const maxEventsPerDay = (CONFIG.BUSINESS_HOURS.END - CONFIG.BUSINESS_HOURS.START);
       if (events.length < maxEventsPerDay) {
+        const year = checkDate.getFullYear();
         const month = checkDate.getMonth() + 1;
         const date = checkDate.getDate();
         const dayName = dayNames[checkDate.getDay()];
-        availableDates.push(`${month}/${date}(${dayName})`);
+        // 年を含めることで年またぎでも安定動作
+        availableDates.push(`${year}/${month}/${date}(${dayName})`);
       }
     }
 
