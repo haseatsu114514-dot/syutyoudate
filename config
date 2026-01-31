@@ -54,6 +54,7 @@ const CONFIG = {
   FORM: {
     BOOKING: {
       ID: '1FAIpQLSfSfjZuM6NXIEusCcV3PIESMXminb7DSP4_zIwPxsxqDPShQg',
+      EDIT_ID: '1Z_2E2SoWH4XC2l7WIWIoMP9OIsEmItZs0_oZRkdRsE8',
       USER_ID_ENTRY: 'entry.519567962',
       POSTAL_CODE_ENTRY: 'entry.929680041'
     }
