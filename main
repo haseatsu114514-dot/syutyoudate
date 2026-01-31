@@ -151,6 +151,14 @@ function handleTextMessage(event) {
     }
     logAction('予約確認', userId, `${bookings.length}件`);
   }
+  // フォーム送信完了報告（裏技）
+  else if (text === '予約フォームを送信しました') {
+    replyMessages = [{
+      type: 'text',
+      text: 'ご連絡ありがとうございます。予約リクエストを承りました。\n\n内容を確認後、担当者より改めてご連絡いたしますので、しばらくお待ちください。'
+    }];
+    logAction('フォーム送信報告受信', userId, '自動返信を実行');
+  }
   // その他 - 応答しない（メッセージ節約）
   else {
     console.log('未対応キーワード - 応答スキップ:', text);
