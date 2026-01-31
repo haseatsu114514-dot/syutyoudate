@@ -49,17 +49,15 @@ const CONFIG = {
   BOOKING_DEADLINE_HOURS: 5,
 
   // ============================================
-  // Google Forms設定
+  // Google Forms設定（フォーム1回完結版）
   // ============================================
   FORM: {
     BOOKING: {
       ID: '1FAIpQLSfSfjZuM6NXIEusCcV3PIESMXminb7DSP4_zIwPxsxqDPShQg',
-      USER_ID_ENTRY: 'entry.519567962'
-    },
-    APPROVED: {
-      ID: '1FAIpQLSfXp_ybSknT3T4JE-uELbh2-_61mHWLepDGGRhz9ieoIlYcLw',
-      USER_ID_ENTRY: 'entry.1592484096'
+      USER_ID_ENTRY: 'entry.519567962',
+      POSTAL_CODE_ENTRY: 'entry.929680041'
     }
+    // APPROVED フォームは廃止（フォーム1回完結のため）
   },
 
   // リトライ設定（最適化済み）
