@@ -122,7 +122,7 @@ function handleTextMessage(event) {
           {
             type: 'uri',
             label: '予約する',
-            uri: buildBookingFormUrl(userId, true)
+            uri: buildBookingFormUrl(userId)
           }
         ]
       }
@@ -222,29 +222,178 @@ function handlePostback(event) {
 
   const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
 
-  // 承認処理
+  // 承認処理（管理者）
   if (data.startsWith('approve_')) {
     const requestId = data.replace('approve_', '');
-    
+
     // ★最速返信
     replyLineMessage(replyToken, [{
       type: 'text',
       text: `処理中...`
     }], adminToken);
-    
+
     approveReservation(requestId, userId);
   }
-  // お断り処理
+  // お断り処理（管理者）
   else if (data.startsWith('reject_')) {
     const requestId = data.replace('reject_', '');
-    
+
     // ★最速返信
     replyLineMessage(replyToken, [{
       type: 'text',
       text: `処理中...`
     }], adminToken);
-    
+
     rejectReservation(requestId, userId);
+  }
+  // 日時変更処理（ユーザー - 弾かれ救済用）
+  else if (data.startsWith('reschedule_')) {
+    // reschedule_{requestId}_{datetime}
+    const parts = data.replace('reschedule_', '').split('_');
+    const requestId = parts[0];
+    const newDateTime = parts.slice(1).join('_'); // 日時に_が含まれる可能性を考慮
+
+    // ★最速返信
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: `${newDateTime} で予約リクエストを送信しています...`
+    }]);
+
+    handleReschedule(requestId, newDateTime, userId);
+  }
+  // 日時変更キャンセル（ユーザー）
+  else if (data.startsWith('cancel_reschedule_')) {
+    const requestId = data.replace('cancel_reschedule_', '');
+
+    // ★最速返信
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: `予約リクエストをキャンセルしました。\n\n別の日時で再度お申し込みください。`
+    }]);
+
+    // 予約データを削除または「キャンセル」ステータスに更新
+    handleRescheduleCancel(requestId, userId);
+  }
+}
+
+/**
+ * 日時変更処理（弾かれ救済用）
+ * ユーザーがクイックリプライで新しい日時を選択した時の処理
+ */
+function handleReschedule(requestId, newDateTime, userId) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 日時変更処理開始 ===');
+    console.log('受付番号:', requestId, '新日時:', newDateTime);
+
+    const booking = getBooking(requestId);
+
+    if (!booking) {
+      console.error('予約が見つかりません');
+      sendLineMessage(userId, [{
+        type: 'text',
+        text: `エラー: 予約が見つかりません。再度フォームからお申し込みください。`
+      }]);
+      return;
+    }
+
+    // 日時を更新
+    booking.desiredDateTime = newDateTime;
+    booking.status = '承認待ち';
+    booking.updatedAt = new Date().toISOString();
+
+    const saved = saveBooking(requestId, booking);
+
+    if (!saved) {
+      console.error('予約更新に失敗');
+      sendLineMessage(userId, [{
+        type: 'text',
+        text: `エラー: 予約の更新に失敗しました。再度お試しください。`
+      }]);
+      return;
+    }
+
+    // 管理者に承認リクエストを送信
+    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
+    const name = booking.userName || '（未設定）';
+
+    const adminMessages = [
+      {
+        type: 'text',
+        text: `新規予約リクエスト（日時変更）\n\n` +
+              `━━━━━━━━━━━━━━\n` +
+              `${name} 様\n` +
+              `━━━━━━━━━━━━━━\n\n` +
+              `📅 ${newDateTime}\n` +
+              `💼 ${booking.course}\n\n` +
+              `📞 ${booking.phone}\n` +
+              `🏠 ${booking.postalCode}\n${booking.address}\n` +
+              `━━━━━━━━━━━━━━\n` +
+              `※ 元の希望日時: ${booking.originalDateTime || '不明'}`
+      },
+      {
+        type: 'template',
+        altText: '予約の確認',
+        template: {
+          type: 'confirm',
+          text: `この予約を受け付けますか？`,
+          actions: [
+            {
+              type: 'postback',
+              label: '受け付ける',
+              data: `approve_${requestId}`
+            },
+            {
+              type: 'postback',
+              label: 'お断りする',
+              data: `reject_${requestId}`
+            }
+          ]
+        }
+      }
+    ];
+
+    const adminSent = sendLineMessage(CONFIG.ADMIN_USER_ID, adminMessages, adminToken);
+    console.log('管理者通知送信結果:', adminSent ? '成功' : '失敗');
+
+    logAction('日時変更リクエスト', userId, `${requestId} → ${newDateTime}`);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 日時変更処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    console.error('handleReschedule error:', error);
+    logError('日時変更処理エラー', error.toString());
+    sendLineMessage(userId, [{
+      type: 'text',
+      text: `エラーが発生しました。再度フォームからお申し込みください。`
+    }]);
+  }
+}
+
+/**
+ * 日時変更キャンセル処理
+ */
+function handleRescheduleCancel(requestId, userId) {
+  try {
+    console.log('=== 日時変更キャンセル処理 ===');
+    console.log('受付番号:', requestId);
+
+    const booking = getBooking(requestId);
+
+    if (booking) {
+      booking.status = 'キャンセル';
+      booking.cancelledAt = new Date().toISOString();
+      booking.updatedAt = new Date().toISOString();
+      saveBooking(requestId, booking);
+    }
+
+    logAction('日時変更キャンセル', userId, requestId);
+
+  } catch (error) {
+    console.error('handleRescheduleCancel error:', error);
+    logError('日時変更キャンセルエラー', error.toString());
   }
 }
 
@@ -270,21 +419,20 @@ function replyLineMessage(replyToken, messages, token) {
 }
 
 /**
- * 予約フォームURL生成
+ * 予約フォームURL生成（フォーム1回完結版）
+ * プリフィル: 管理用ID(userId) + 郵便番号(〒)
  */
-function buildBookingFormUrl(userId, isFirstTime) {
-  const formId = isFirstTime ? CONFIG.FORM.BOOKING.ID : CONFIG.FORM.APPROVED.ID;
-  const entryId = isFirstTime ? CONFIG.FORM.BOOKING.USER_ID_ENTRY : CONFIG.FORM.APPROVED.USER_ID_ENTRY;
+function buildBookingFormUrl(userId) {
+  const formId = CONFIG.FORM.BOOKING.ID;
+  const userIdEntry = CONFIG.FORM.BOOKING.USER_ID_ENTRY;
+  const postalCodeEntry = CONFIG.FORM.BOOKING.POSTAL_CODE_ENTRY;
 
-  if (!isFirstTime) {
-    return `https://docs.google.com/forms/d/e/${formId}/viewform?usp=pp_url&entry.706843991=%E3%80%92&${entryId}=${encodeURIComponent(userId)}`;
-  }
-
-  return `https://docs.google.com/forms/d/e/${formId}/viewform?usp=pp_url&${entryId}=${encodeURIComponent(userId)}`;
+  return `https://docs.google.com/forms/d/e/${formId}/viewform?usp=pp_url&${userIdEntry}=${encodeURIComponent(userId)}&${postalCodeEntry}=%E3%80%92`;
 }
 
 /**
- * 予約承認処理（軽量化版）
+ * 予約承認処理（フォーム1回完結版）
+ * 承認と同時にカレンダー登録＆確定通知を送信
  */
 function approveReservation(requestId, adminUserId) {
   const startTime = Date.now();
@@ -305,18 +453,18 @@ function approveReservation(requestId, adminUserId) {
       return;
     }
 
-    if (booking.status === '承認済み') {
-      console.log('すでに承認済みです');
+    if (booking.status === '確定') {
+      console.log('すでに確定済みです');
       const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
       sendLineMessage(adminUserId, [{
         type: 'text',
-        text: `この予約はすでに承認済みです\n\n受付番号: ${requestId}`
+        text: `この予約はすでに確定済みです\n\n受付番号: ${requestId}`
       }], adminToken);
       return;
     }
 
-    // ステータス更新
-    booking.status = '承認済み';
+    // ステータスを「確定」に更新（承認と同時に確定）
+    booking.status = '確定';
     booking.approvedDateTime = booking.desiredDateTime;
     booking.approvedAt = new Date().toISOString();
     booking.approvedBy = adminUserId;
@@ -334,42 +482,52 @@ function approveReservation(requestId, adminUserId) {
       return;
     }
 
-    console.log('承認処理成功:', requestId);
+    // ★ Googleカレンダーに登録
+    const name = booking.userName || '（未設定）';
+    const calendarAdded = addToCalendar(booking.approvedDateTime, booking.course, requestId, name);
+    console.log('カレンダー登録結果:', calendarAdded ? '成功' : '失敗');
 
-    // ユーザーへ通知（承認後フォームURLを含む）
-    const approvedFormUrl = buildBookingFormUrl(booking.userId, false);
+    // ★ フォーム選択肢を更新（空き時間から削除）
+    try {
+      updateFormDateChoices();
+    } catch (updateError) {
+      console.error('フォーム選択肢更新エラー:', updateError);
+    }
 
-    const userMessage = {
-      type: 'template',
-      altText: '予約承認のお知らせ',
-      template: {
-        type: 'buttons',
-        text: `リクエストを承認いたしました\n\n━━━━━━━━━━━━━━\n${booking.approvedDateTime}\n${booking.course}\n━━━━━━━━━━━━━━\n\nまだ予約は確定していません\n\n下記ボタンから追加情報(お名前・ご連絡先・ご住所)を入力してください`,
-        actions: [
-          {
-            type: 'uri',
-            label: '追加情報を入力する',
-            uri: approvedFormUrl
-          }
-        ]
-      }
-    };
+    console.log('承認・確定処理成功:', requestId);
 
-    sendLineMessage(booking.userId, [userMessage]);
+    // ★ ユーザーへ確定通知（Push API - 有料1通目）
+    const userMessage = `ご予約が確定しました\n\n` +
+                       `━━━━━━━━━━━━━━\n` +
+                       `📅 日時\n${booking.approvedDateTime}\n\n` +
+                       `💼 コース\n${booking.course}\n\n` +
+                       `🏠 当日お伺いする住所\n${booking.postalCode}\n${booking.address}\n` +
+                       `━━━━━━━━━━━━━━\n\n` +
+                       `${name} 様\n\n` +
+                       `当日お伺いします\nご不明点はお気軽にお問い合わせください`;
 
-    // 管理者へ確認通知（簡潔版）
-    const adminMessage = `承認完了\n\n受付番号\n${requestId}\n\n日時\n${booking.approvedDateTime}\n\nコース\n${booking.course}\n\n場所\n${booking.location}\n\nユーザーに追加情報フォームを送信しました`;
+    sendLineMessage(booking.userId, [{ type: 'text', text: userMessage }]);
+
+    // ★ 管理者へ確定通知（Reply APIで既に返信済みなので、詳細はPushで送信）
+    const adminMessage = `✅ 予約確定\n\n` +
+                       `━━━━━━━━━━━━━━\n` +
+                       `📅 日時\n${booking.approvedDateTime}\n\n` +
+                       `💼 コース\n${booking.course}\n\n` +
+                       `👤 お名前\n${name} 様\n` +
+                       `━━━━━━━━━━━━━━\n\n` +
+                       `📞 電話番号\n${booking.phone}\n\n` +
+                       `🏠 住所\n${booking.postalCode}\n${booking.address}\n\n` +
+                       `━━━━━━━━━━━━━━\n` +
+                       `受付番号: ${requestId}\n` +
+                       `カレンダー: ${calendarAdded ? '✓' : '✗'}`;
 
     const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
-    sendLineMessage(adminUserId, [{
-      type: 'text',
-      text: adminMessage
-    }], adminToken);
+    sendLineMessage(adminUserId, [{ type: 'text', text: adminMessage }], adminToken);
 
-    logAction('予約承認', adminUserId, requestId);
+    logAction('予約確定', adminUserId, requestId);
 
     const duration = Date.now() - startTime;
-    console.log(`=== 予約承認処理完了 (${duration}ms) ===`);
+    console.log(`=== 予約承認・確定処理完了 (${duration}ms) ===`);
 
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -464,24 +622,14 @@ function rejectReservation(requestId, adminUserId) {
 // ============================================
 
 /**
- * フォーム送信時のトリガー関数
+ * フォーム送信時のトリガー関数（フォーム1回完結版）
  */
 function onFormSubmit(e) {
   try {
-    const sheetName = e.range.getSheet().getName();
     console.log('=== フォーム回答受信 ===');
-    console.log('シート名:', sheetName);
 
-    if (sheetName === 'フォームの回答 1') {
-      console.log('→ 初回予約フォームと判定');
-      handleInitialFormSubmit(e);
-    } else if (sheetName === 'フォームの回答 2') {
-      console.log('→ 承認後フォームと判定');
-      handleApprovedFormSubmit(e);
-    } else {
-      console.error('不明なシート名:', sheetName);
-      logError('フォーム送信エラー', `不明なシート: ${sheetName}`);
-    }
+    // フォーム1回完結なので、すべての回答を handleInitialFormSubmit で処理
+    handleInitialFormSubmit(e);
 
   } catch (error) {
     console.error('onFormSubmit error:', error);
@@ -500,27 +648,34 @@ function onFormSubmit(e) {
 }
 
 /**
- * 初回予約フォーム送信処理（超高速版・ユーザー通知最優先）
+ * 予約フォーム送信処理（フォーム1回完結版）
+ * 全情報を1回のフォームで取得し、承認後は即確定
  */
 function handleInitialFormSubmit(e) {
   const startTime = Date.now();
 
   try {
-    console.log('=== 初回予約フォーム処理開始 ===');
+    console.log('=== 予約フォーム処理開始 ===');
 
     const data = e.namedValues;
-    
-    const userId = data['管理用 ID'] ? data['管理用 ID'][0] : null;
+
+    // 基本情報
+    const userId = data['管理用ID(⚠️変更を加えないでください)'] ? data['管理用ID(⚠️変更を加えないでください)'][0] : null;
     const name = data['お名前'] ? data['お名前'][0] : '（未入力）';
     const desiredDate = data['希望日'] ? data['希望日'][0] : null;
     const desiredTime = data['希望時刻'] ? data['希望時刻'][0] : null;
     const course = data['コース'] ? data['コース'][0] : null;
-    const location = data['出張場所'] ? data['出張場所'][0] : null;
+
+    // 連絡先情報
+    const phone = data['電話番号'] ? data['電話番号'][0] : null;
+    const postalCode = data['郵便番号'] ? data['郵便番号'][0] : '';
+    const address = data['ご住所'] ? data['ご住所'][0] : null;
 
     console.log('受信データ - userId:', userId, 'date:', desiredDate, 'time:', desiredTime);
+    console.log('連絡先情報 - phone:', phone ? '入力あり' : 'なし', 'address:', address ? '入力あり' : 'なし');
 
-    if (!userId || !desiredDate || !desiredTime || !course || !location) {
-      console.error('必須項目不足 - userId:', userId, 'date:', desiredDate, 'time:', desiredTime, 'course:', course, 'location:', location);
+    if (!userId || !desiredDate || !desiredTime || !course || !phone || !address) {
+      console.error('必須項目不足 - userId:', userId, 'date:', desiredDate, 'time:', desiredTime, 'course:', course, 'phone:', phone, 'address:', address);
       return;
     }
 
@@ -534,23 +689,73 @@ function handleInitialFormSubmit(e) {
     const desiredDateTime = `${dateStr} ${desiredTime}`;
     const requestId = generateRequestId();
 
-    // ★★★ 高速カレンダーチェック（空きスロット提案なし）★★★
+    // ★★★ 高速カレンダーチェック ★★★
     const availability = checkCalendarFast(new Date(desiredDateTime), course);
 
-    // 既に予約が入っている場合
+    // 既に予約が入っている場合 → クイックリプライで空き時間を提案
     if (!availability.available) {
-      console.log('カレンダーに予約あり - 却下');
-      
-      const rejectionMessage = `申し訳ございません。\n\n${availability.reason}\n\n別の日時でお試しください。`;
-      
-      // メインbotで送信
-      const sent = sendLineMessage(userId, [{ type: 'text', text: rejectionMessage }]);
-      console.log('却下通知送信結果:', sent ? '成功' : '失敗');
-      
-      logAction('予約リクエスト却下', userId, desiredDateTime);
-      
+      console.log('カレンダーに予約あり - クイックリプライで救済');
+
+      // 予約データを一時保存（日時調整中ステータス）
+      const tempBookingData = {
+        requestId: requestId,
+        userId: userId,
+        userName: name,
+        desiredDateTime: desiredDateTime,
+        course: course,
+        phone: phone,
+        postalCode: postalCode,
+        address: address,
+        status: '日時調整中',
+        originalDateTime: desiredDateTime,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      saveBooking(requestId, tempBookingData);
+
+      // 空き時間を取得
+      const suggestions = findAvailableSlots(new Date(desiredDateTime), course);
+
+      if (suggestions.length > 0) {
+        // クイックリプライで空き時間を提案
+        const quickReplyItems = suggestions.slice(0, 10).map(slot => ({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: slot.replace(/^\d{4}-/, '').replace(' ', ' '),
+            data: `reschedule_${requestId}_${slot}`
+          }
+        }));
+
+        // キャンセルボタンも追加
+        quickReplyItems.push({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: 'キャンセル',
+            data: `cancel_reschedule_${requestId}`
+          }
+        });
+
+        const rescheduleMessage = {
+          type: 'text',
+          text: `申し訳ございません。\n${availability.reason}\n\n以下の空き時間はいかがですか？`,
+          quickReply: {
+            items: quickReplyItems
+          }
+        };
+
+        sendLineMessage(userId, [rescheduleMessage]);
+        logAction('日時調整提案', userId, `${requestId} - 空き${suggestions.length}件`);
+      } else {
+        // 空き時間がない場合
+        const noSlotMessage = `申し訳ございません。\n${availability.reason}\n\n本日の空き時間がありません。\n別の日で再度お申し込みください。`;
+        sendLineMessage(userId, [{ type: 'text', text: noSlotMessage }]);
+        logAction('予約リクエスト却下', userId, `${desiredDateTime} - 空きなし`);
+      }
+
       const duration = Date.now() - startTime;
-      console.log(`=== カレンダー重複のため処理終了 (${duration}ms) ===`);
+      console.log(`=== カレンダー重複 - クイックリプライ送信完了 (${duration}ms) ===`);
       return;
     }
 
@@ -560,26 +765,36 @@ function handleInitialFormSubmit(e) {
     // ★ユーザー通知は省略（Googleフォーム完了画面で確認してもらう）
     // → 1通節約 + 処理高速化
 
-    // ★2. 予約データ保存
+    // ★ 予約データ保存（全情報を含む）
     saveBooking(requestId, {
       requestId: requestId,
       userId: userId,
       userName: name,
       desiredDateTime: desiredDateTime,
       course: course,
-      location: location,
+      phone: phone,
+      postalCode: postalCode,
+      address: address,
       status: '承認待ち',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
 
-    // ★3. 管理者への通知（1回のAPIコールに統合）
+    // ★ 管理者への通知（全情報を表示）
     const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
 
     const adminMessages = [
       {
         type: 'text',
-        text: `新規予約リクエスト\n\n${name} 様\n${dateStr} ${desiredTime}\n${course}\n${location}`
+        text: `新規予約リクエスト\n\n` +
+              `━━━━━━━━━━━━━━\n` +
+              `${name} 様\n` +
+              `━━━━━━━━━━━━━━\n\n` +
+              `📅 ${dateStr} ${desiredTime}\n` +
+              `💼 ${course}\n\n` +
+              `📞 ${phone}\n` +
+              `🏠 ${postalCode}\n${address}\n` +
+              `━━━━━━━━━━━━━━`
       },
       {
         type: 'template',
@@ -609,101 +824,12 @@ function handleInitialFormSubmit(e) {
     logAction('予約リクエスト受信', userId, requestId);
 
     const duration = Date.now() - startTime;
-    console.log(`=== 初回フォーム処理完了 (${duration}ms) ===`);
+    console.log(`=== 予約フォーム処理完了 (${duration}ms) ===`);
 
   } catch (error) {
     console.error(`handleInitialFormSubmit error:`, error);
-    logError('初回フォーム処理エラー', error.toString());
+    logError('予約フォーム処理エラー', error.toString());
   }
 }
 
-/**
- * 承認後フォーム送信処理（表示改善版）
- */
-function handleApprovedFormSubmit(e) {
-  const startTime = Date.now();
-
-  try {
-    console.log('=== 承認後フォーム処理開始 ===');
-
-    const data = e.namedValues;
-    
-    const userId = data['管理用 ID'] ? data['管理用 ID'][0] : null;
-    const phone = data['電話番号'] ? data['電話番号'][0] : null;
-    const postalCode = data['郵便番号'] ? data['郵便番号'][0] : null;
-    const address = data['ご住所'] ? data['ご住所'][0] : null;
-
-    console.log('userId:', userId);
-    console.log('phone:', phone);
-    console.log('postalCode:', postalCode);
-    console.log('address:', address);
-
-    if (!userId || !phone || !address) {
-      console.error('必須項目不足');
-      return;
-    }
-
-    // 最新の承認済み予約を検索
-    const booking = findLatestApprovedBookingByUserId(userId);
-
-    if (!booking) {
-      console.error('承認済み予約が見つかりません');
-      return;
-    }
-
-    const name = booking.userName || '（未設定）';
-
-    // 追加情報を保存
-    booking.additionalInfo = {
-      phone: phone,
-      postalCode: postalCode,
-      address: address,
-      submittedAt: new Date().toISOString()
-    };
-    booking.status = '確定';
-    booking.updatedAt = new Date().toISOString();
-
-    saveBooking(booking.requestId, booking);
-
-    // Googleカレンダーに登録
-    const calendarAdded = addToCalendar(booking.approvedDateTime, booking.course, booking.requestId, name);
-
-    // ★ ユーザーへ確定通知（管理botトークンで送信）
-    const userMessage = `ご予約が確定しました\n\n` +
-                       `━━━━━━━━━━━━━━\n` +
-                       `📅 日時\n${booking.approvedDateTime}\n\n` +
-                       `💼 コース\n${booking.course}\n\n` +
-                       `🏠 当日お伺いする住所\n${postalCode}\n${address}\n` +
-                       `━━━━━━━━━━━━━━\n\n` +
-                       `${name} 様\n\n` +
-                       `当日お伺いします\nご不明点はお気軽にお問い合わせください`;
-
-    sendLineMessage(userId, [{ type: 'text', text: userMessage }]);
-
-    // ★ 管理者への確定通知（住所を含む詳細版）
-    const adminMessage = `✅ 予約確定\n\n` +
-                       `━━━━━━━━━━━━━━\n` +
-                       `📅 日時\n${booking.approvedDateTime}\n\n` +
-                       `💼 コース\n${booking.course}\n\n` +
-                       `👤 お名前\n${name} 様\n` +
-                       `━━━━━━━━━━━━━━\n\n` +
-                       `📞 電話番号\n${phone}\n\n` +
-                       `🏠 住所\n${postalCode}\n${address}\n\n` +
-                       `━━━━━━━━━━━━━━\n` +
-                       `受付番号: ${booking.requestId}\n` +
-                       `カレンダー: ${calendarAdded ? '✓' : '✗'}`;
-
-    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
-    sendLineMessage(CONFIG.ADMIN_USER_ID, [{ type: 'text', text: adminMessage }], adminToken);
-
-    logAction('予約確定', userId, booking.requestId);
-
-    const duration = Date.now() - startTime;
-    console.log(`=== 承認後フォーム処理完了 (${duration}ms) ===`);
-
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error(`handleApprovedFormSubmit error (${duration}ms):`, error);
-    logError('承認後フォーム処理エラー', error.toString());
-  }
-}
+// handleApprovedFormSubmit は廃止（フォーム1回完結のため）
