@@ -504,7 +504,8 @@ function approveReservation(requestId, adminUserId) {
                        `🏠 当日お伺いする住所\n${booking.postalCode}\n${booking.address}\n` +
                        `━━━━━━━━━━━━━━\n\n` +
                        `${name} 様\n\n` +
-                       `当日お伺いします\nご不明点はお気軽にお問い合わせください`;
+                       `当日お伺いします\n\n` +
+                       `※ご予約後のキャンセル・変更は\nお電話にてお問い合わせください`;
 
     sendLineMessage(booking.userId, [{ type: 'text', text: userMessage }]);
 
