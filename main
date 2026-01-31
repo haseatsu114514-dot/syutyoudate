@@ -110,14 +110,7 @@ function handleTextMessage(event) {
     }];
     logAction('ID確認', userId, userId);
   }
-  // フォーム送信完了報告（優先チェック）
-  else if (text === '予約フォームを送信しました') {
-    replyMessages = [{
-      type: 'text',
-      text: 'ご連絡ありがとうございます。予約リクエストを承りました。\n\n内容を確認後、担当者より改めてご連絡いたしますので、しばらくお待ちください。'
-    }];
-    logAction('フォーム送信報告受信', userId, '自動返信を実行');
-  }
+
   // 予約開始
   else if ((text.includes('予約') || text.includes('よやく')) && !text.includes('確認') && !text.includes('一覧')) {
     replyMessages = [{
@@ -812,8 +805,14 @@ function handleInitialFormSubmit(e) {
     // カレンダーが空いている場合
     console.log('カレンダー空きあり - 予約リクエストを受け付け');
 
-    // ★ユーザー通知は省略（Googleフォーム完了画面で確認してもらう）
-    // → 1通節約 + 処理高速化
+    // ★ユーザーへ受付完了通知（Push API - 有料1通目）
+    const userReceiptMessage = 'ご予約リクエストを承りました。\n\n' +
+                               '内容を確認後、担当者より改めて「予約確定」のご連絡をいたします。\n' + 
+                               '（※まだ予約は確定しておりません）\n\n' +
+                               '通知が届くまで、しばらくお待ちください。';
+    
+    sendLineMessage(userId, [{ type: 'text', text: userReceiptMessage }]);
+    logAction('受付完了通知送信', userId, '有料メッセージ');
 
     // ★ 予約データ保存（全情報を含む）
     saveBooking(requestId, {
