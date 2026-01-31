@@ -847,12 +847,24 @@ function getAvailableDates(days) {
       return [];
     }
 
+    const now = new Date();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    for (let i = 1; i <= days; i++) {
+    // 当日(i=0)から開始
+    for (let i = 0; i <= days; i++) {
       const checkDate = new Date(today);
       checkDate.setDate(today.getDate() + i);
+
+      // 当日の場合：5時間ルールで予約可能か判定
+      if (i === 0) {
+        // 当日の最終予約可能時刻 = 営業終了 - 締切時間
+        const lastBookableHour = CONFIG.BUSINESS_HOURS.END - CONFIG.BOOKING_DEADLINE_HOURS;
+        if (now.getHours() >= lastBookableHour) {
+          // 当日はもう予約できない
+          continue;
+        }
+      }
 
       // その日の営業時間内にイベントがあるかチェック
       const dayStart = new Date(checkDate);
