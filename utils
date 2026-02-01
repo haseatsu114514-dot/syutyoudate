@@ -834,9 +834,9 @@ function updateFormDateChoices() {
 }
 
 /**
- * 空いている日を取得
+ * 空いている日を取得（物理的に予約可能な日のみ）
  * @param {number} days - 何日先までチェックするか
- * @returns {string[]} - 空いている日の配列（例: ["2/1(土)", "2/3(月)"]）
+ * @returns {string[]} - 空いている日の配列（例: ["2026/2/1(土)", "2026/2/3(月)"]）
  */
 function getAvailableDates(days) {
   const availableDates = [];
@@ -855,10 +855,14 @@ function getAvailableDates(days) {
 
     // 最小コース時間を取得（デフォルト60分）
     let minDuration = 60;
+    let minBufferBefore = CONFIG.BUFFER_TIME;
+    let minBufferAfter = CONFIG.BUFFER_TIME;
     if (CONFIG.COURSES) {
-      const durations = Object.values(CONFIG.COURSES).map(c => c.duration);
-      if (durations.length > 0) {
-        minDuration = Math.min(...durations);
+      const courseValues = Object.values(CONFIG.COURSES);
+      if (courseValues.length > 0) {
+        minDuration = Math.min(...courseValues.map(c => c.duration));
+        minBufferBefore = Math.min(...courseValues.map(c => c.bufferBefore !== undefined ? c.bufferBefore : CONFIG.BUFFER_TIME));
+        minBufferAfter = Math.min(...courseValues.map(c => c.bufferAfter !== undefined ? c.bufferAfter : CONFIG.BUFFER_TIME));
       }
     }
 
@@ -872,48 +876,30 @@ function getAvailableDates(days) {
         // 営業終了時刻
         const endHour = CONFIG.BUSINESS_HOURS.END;
         // 最終予約開始可能時刻 = 営業終了 - 最小施術時間(時間換算)
-        // ※ここではシンプルに「施術が終わる時間」が営業終了を超えないようにする
-        const lastStartHour = endHour - (minDuration / 60); 
-        
+        const lastStartHour = endHour - (minDuration / 60);
+
         // 予約締切時刻 = 最終開始時刻 - 5時間
         const deadlineHour = lastStartHour - CONFIG.BOOKING_DEADLINE_HOURS;
 
-        // 現在時刻と比較 (厳密に分単位でチェック)
-        const deadlineTime = new Date();
+        // 現在時刻と比較
+        const deadlineTime = new Date(checkDate);
         deadlineTime.setHours(Math.floor(deadlineHour), (deadlineHour % 1) * 60, 0, 0);
-          
+
         if (now >= deadlineTime) {
           // 当日はもう予約できない
           continue;
         }
       }
 
-      // その日の営業時間内にイベントがあるかチェック
-      const dayStart = new Date(checkDate);
-      dayStart.setHours(CONFIG.BUSINESS_HOURS.START, 0, 0, 0);
+      // その日に空きスロットがあるかチェック
+      const availableSlots = getAvailableTimeSlots(checkDate);
 
-      const dayEnd = new Date(checkDate);
-      dayEnd.setHours(CONFIG.BUSINESS_HOURS.END, 0, 0, 0);
-
-      const events = calendar.getEvents(dayStart, dayEnd);
-
-      // 空き時間があるかチェック（簡易版: イベント数が少なければ空きあり）
-      const businessHoursDuration = CONFIG.BUSINESS_HOURS.END - CONFIG.BUSINESS_HOURS.START;
-      
-      // イベントの合計時間を計算
-      let totalEventDurationMinutes = 0;
-      events.forEach(e => {
-        totalEventDurationMinutes += (e.getEndTime() - e.getStartTime()) / (1000 * 60);
-      });
-      
-      // 営業時間の何割が埋まっているかで判定（90%以上埋まっていたら除外）
-      const totalBusinessMinutes = businessHoursDuration * 60;
-      if (totalEventDurationMinutes < totalBusinessMinutes * 0.9) {
+      // 空きスロットが1つでもあれば、その日は選択可能
+      if (availableSlots.length > 0) {
         const year = checkDate.getFullYear();
         const month = checkDate.getMonth() + 1;
         const date = checkDate.getDate();
         const dayName = dayNames[checkDate.getDay()];
-        // 年を含めることで年またぎでも安定動作
         availableDates.push(`${year}/${month}/${date}(${dayName})`);
       }
     }
@@ -923,6 +909,86 @@ function getAvailableDates(days) {
   }
 
   return availableDates;
+}
+
+/**
+ * 指定された日付の空き時間スロットを取得
+ * @param {Date} targetDate - 対象の日付
+ * @returns {string[]} - 空き時間の配列（例: ["12:00", "12:30", "13:00"]）
+ */
+function getAvailableTimeSlots(targetDate) {
+  const availableSlots = [];
+
+  try {
+    const calendar = CalendarApp.getCalendarById(CONFIG.CALENDAR_IDS[0]);
+    if (!calendar) {
+      console.error('カレンダーが見つかりません');
+      return [];
+    }
+
+    const now = new Date();
+
+    // 最大のバッファ時間を取得（最も制約の厳しいコースに合わせる）
+    let maxBufferBefore = CONFIG.BUFFER_TIME;
+    let maxBufferAfter = CONFIG.BUFFER_TIME;
+    let minDuration = 60;
+    if (CONFIG.COURSES) {
+      const courseValues = Object.values(CONFIG.COURSES);
+      if (courseValues.length > 0) {
+        maxBufferBefore = Math.max(...courseValues.map(c => c.bufferBefore !== undefined ? c.bufferBefore : CONFIG.BUFFER_TIME));
+        maxBufferAfter = Math.max(...courseValues.map(c => c.bufferAfter !== undefined ? c.bufferAfter : CONFIG.BUFFER_TIME));
+        minDuration = Math.min(...courseValues.map(c => c.duration));
+      }
+    }
+
+    // 検索範囲：その日の0時～24時（バッファを考慮して広めに取得）
+    const searchStart = new Date(targetDate);
+    searchStart.setHours(0, 0, 0, 0);
+    const searchEnd = new Date(targetDate);
+    searchEnd.setHours(23, 59, 59, 999);
+
+    // 1日分のイベントを一括取得
+    const dayEvents = calendar.getEvents(searchStart, searchEnd);
+
+    // 営業時間内を30分刻みでチェック
+    const checkDate = new Date(targetDate);
+
+    for (let hour = CONFIG.BUSINESS_HOURS.START; hour < CONFIG.BUSINESS_HOURS.END; hour++) {
+      for (let minute = 0; minute < 60; minute += 30) {
+        const slotTime = new Date(checkDate);
+        slotTime.setHours(hour, minute, 0, 0);
+
+        // 5時間ルールチェック
+        const deadlineTime = new Date(slotTime.getTime() - CONFIG.BOOKING_DEADLINE_HOURS * 60 * 60 * 1000);
+        if (now > deadlineTime) {
+          continue; // この時間は予約締切を過ぎている
+        }
+
+        // バッファを含めた時間範囲で空きをチェック
+        const bufferStart = new Date(slotTime.getTime() - maxBufferBefore * 60 * 1000);
+        const bufferEnd = new Date(slotTime.getTime() + (minDuration + maxBufferAfter) * 60 * 1000);
+
+        // イベントと重なっていないかチェック
+        let hasConflict = false;
+        for (const event of dayEvents) {
+          if (event.getStartTime() < bufferEnd && event.getEndTime() > bufferStart) {
+            hasConflict = true;
+            break;
+          }
+        }
+
+        if (!hasConflict) {
+          const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+          availableSlots.push(timeStr);
+        }
+      }
+    }
+
+  } catch (error) {
+    console.error('getAvailableTimeSlots error:', error);
+  }
+
+  return availableSlots;
 }
 
 /**

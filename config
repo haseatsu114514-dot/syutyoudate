@@ -20,7 +20,7 @@ const CONFIG = {
   // カレンダー設定（最大2つまで登録可能）
   // ============================================
   CALENDAR_IDS: [
-    'primary',
+    '1213d9b9084fbb4ea89983b9e46a723528b1d350860c8bfe4f55a3d63e415f46@group.calendar.google.com',
   ],
 
   // 営業時間
