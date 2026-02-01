@@ -788,6 +788,17 @@ function getAvailableDates(days) {
       }
     }
 
+    // ★ 一括取得 (N+1問題解消): 当日から指定日数分を取得
+    const fetchStart = new Date(today);
+    fetchStart.setHours(CONFIG.BUSINESS_HOURS.START, 0, 0, 0);
+
+    const fetchEnd = new Date(today);
+    fetchEnd.setDate(today.getDate() + days); // 14日後
+    fetchEnd.setHours(CONFIG.BUSINESS_HOURS.END, 0, 0, 0);
+
+    // イベントを一括取得
+    const allEvents = calendar.getEvents(fetchStart, fetchEnd);
+
     // 当日(i=0)から開始
     for (let i = 0; i <= days; i++) {
       const checkDate = new Date(today);
@@ -821,14 +832,17 @@ function getAvailableDates(days) {
       const dayEnd = new Date(checkDate);
       dayEnd.setHours(CONFIG.BUSINESS_HOURS.END, 0, 0, 0);
 
-      const events = calendar.getEvents(dayStart, dayEnd);
+      // メモリ上でこの日のイベントをフィルタリング (高速化)
+      const dayEvents = allEvents.filter(e => {
+        return e.getStartTime() < dayEnd && e.getEndTime() > dayStart;
+      });
 
       // 空き時間があるかチェック（簡易版: イベント数が少なければ空きあり）
       const businessHoursDuration = CONFIG.BUSINESS_HOURS.END - CONFIG.BUSINESS_HOURS.START;
       
       // イベントの合計時間を計算
       let totalEventDurationMinutes = 0;
-      events.forEach(e => {
+      dayEvents.forEach(e => {
         totalEventDurationMinutes += (e.getEndTime() - e.getStartTime()) / (1000 * 60);
       });
       
