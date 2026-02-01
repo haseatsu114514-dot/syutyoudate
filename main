@@ -670,135 +670,108 @@ function handleInitialFormSubmit(e) {
     // 基本情報
     const userId = getValue('管理用ID(⚠️変更を加えないでください)', null);
     const name = getValue('お名前', '（未入力）');
+    const course = getValue('コース', null);
+
+    // 日時情報（新形式: 「希望日時」統合形式 または 旧形式: 「希望日」+「希望時刻」）
+    let desiredDateTimeRaw = getValue('希望日時', null);
     const desiredDate = getValue('希望日', null);
     const desiredTime = getValue('希望時刻', null);
-    const course = getValue('コース', null);
 
     // 連絡先情報
     const phone = getValue('電話番号', '未入力');
     const postalCode = getValue('郵便番号', '');
     const address = getValue('ご住所', '未入力');
 
-    console.log('受信データ - userId:', userId, 'date:', desiredDate, 'time:', desiredTime);
+    console.log('受信データ - userId:', userId, 'dateTime:', desiredDateTimeRaw, 'date:', desiredDate, 'time:', desiredTime);
     console.log('連絡先情報 - phone:', phone ? '入力あり' : 'なし', 'address:', address ? '入力あり' : 'なし');
 
-    if (!userId || !desiredDate || !desiredTime || !course || !phone || !address) {
-      console.error('必須項目不足 - userId:', userId, 'date:', desiredDate, 'time:', desiredTime, 'course:', course, 'phone:', phone, 'address:', address);
+    // 必須項目チェック（新形式または旧形式のいずれかが必要）
+    const hasDateTime = desiredDateTimeRaw !== null;
+    const hasDateAndTime = desiredDate !== null && desiredTime !== null;
+
+    if (!userId || (!hasDateTime && !hasDateAndTime) || !course || !phone || !address) {
+      console.error('必須項目不足 - userId:', userId, 'dateTime:', desiredDateTimeRaw, 'date:', desiredDate, 'time:', desiredTime, 'course:', course, 'phone:', phone, 'address:', address);
       return;
     }
 
-    // 日付フォーマットの整形（ドロップダウン "2/1(日)" 形式に対応）
-    let dateStr = desiredDate;
+    // 日時フォーマットの整形
+    let dateStr;
+    let timeStr;
     let reservationDate;
 
-    if (desiredDate instanceof Date || typeof desiredDate === 'object') {
-      reservationDate = new Date(desiredDate);
-      dateStr = `${reservationDate.getFullYear()}-${String(reservationDate.getMonth() + 1).padStart(2, '0')}-${String(reservationDate.getDate()).padStart(2, '0')}`;
-    } else {
-      // "2026/2/1(土)" または "2/1(日)" 形式をパース
-      const dateMatchWithYear = desiredDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
-      const dateMatchNoYear = desiredDate.match(/^(\d{1,2})\/(\d{1,2})/);
+    if (hasDateTime) {
+      // 新形式: "2026/2/1(土) 12:00" をパース
+      const dateTimeMatch = desiredDateTimeRaw.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\([日月火水木金土]\)\s+(\d{1,2}):(\d{2})$/);
 
-      if (dateMatchWithYear) {
-        // 年あり形式: "2026/2/1(土)"
-        const year = parseInt(dateMatchWithYear[1], 10);
-        const month = parseInt(dateMatchWithYear[2], 10);
-        const day = parseInt(dateMatchWithYear[3], 10);
-        reservationDate = new Date(year, month - 1, day);
+      if (dateTimeMatch) {
+        const year = parseInt(dateTimeMatch[1], 10);
+        const month = parseInt(dateTimeMatch[2], 10);
+        const day = parseInt(dateTimeMatch[3], 10);
+        const hour = parseInt(dateTimeMatch[4], 10);
+        const minute = parseInt(dateTimeMatch[5], 10);
+
+        reservationDate = new Date(year, month - 1, day, hour, minute, 0, 0);
         dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      } else if (dateMatchNoYear) {
-        // 年なし形式: "2/1(日)" （後方互換性）
-        const month = parseInt(dateMatchNoYear[1], 10);
-        const day = parseInt(dateMatchNoYear[2], 10);
-        const year = new Date().getFullYear();
-        const currentMonth = new Date().getMonth() + 1;
-        const actualYear = (month < currentMonth && currentMonth >= 11) ? year + 1 : year;
-        reservationDate = new Date(actualYear, month - 1, day);
-        dateStr = `${actualYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
       } else {
-        // パースできない場合はそのまま
+        console.error('希望日時のパースに失敗:', desiredDateTimeRaw);
+        return;
+      }
+    } else {
+      // 旧形式: 「希望日」+「希望時刻」（後方互換性）
+      if (desiredDate instanceof Date || typeof desiredDate === 'object') {
         reservationDate = new Date(desiredDate);
+        dateStr = `${reservationDate.getFullYear()}-${String(reservationDate.getMonth() + 1).padStart(2, '0')}-${String(reservationDate.getDate()).padStart(2, '0')}`;
+      } else {
+        const dateMatchWithYear = desiredDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+        const dateMatchNoYear = desiredDate.match(/^(\d{1,2})\/(\d{1,2})/);
+
+        if (dateMatchWithYear) {
+          const year = parseInt(dateMatchWithYear[1], 10);
+          const month = parseInt(dateMatchWithYear[2], 10);
+          const day = parseInt(dateMatchWithYear[3], 10);
+          reservationDate = new Date(year, month - 1, day);
+          dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        } else if (dateMatchNoYear) {
+          const month = parseInt(dateMatchNoYear[1], 10);
+          const day = parseInt(dateMatchNoYear[2], 10);
+          const year = new Date().getFullYear();
+          const currentMonth = new Date().getMonth() + 1;
+          const actualYear = (month < currentMonth && currentMonth >= 11) ? year + 1 : year;
+          reservationDate = new Date(actualYear, month - 1, day);
+          dateStr = `${actualYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        } else {
+          reservationDate = new Date(desiredDate);
+          dateStr = desiredDate;
+        }
+      }
+
+      // 時刻を追加
+      const timeMatch = desiredTime.match(/(\d{1,2}):(\d{2})/);
+      if (timeMatch && reservationDate) {
+        reservationDate.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), 0, 0);
+        timeStr = desiredTime;
       }
     }
 
-    // 時刻を追加
-    const timeMatch = desiredTime.match(/(\d{1,2}):(\d{2})/);
-    if (timeMatch && reservationDate) {
-      reservationDate.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), 0, 0);
-    }
-
-    const desiredDateTime = `${dateStr} ${desiredTime}`;
+    const desiredDateTime = `${dateStr} ${timeStr}`;
     const requestId = generateRequestId();
 
-    console.log('パース結果 - dateStr:', dateStr, 'reservationDate:', reservationDate);
+    console.log('パース結果 - dateStr:', dateStr, 'timeStr:', timeStr, 'reservationDate:', reservationDate);
 
     // ★★★ 高速カレンダーチェック ★★★
     const availability = checkCalendarFast(reservationDate, course);
 
-    // 既に予約が入っている場合 → クイックリプライで空き時間を提案
+    // 既に予約が入っている場合 → シンプルなエラーメッセージ
     if (!availability.available) {
-      console.log('カレンダーに予約あり - クイックリプライで救済');
+      console.log('カレンダーに予約あり - 予約不可メッセージを送信');
 
-      // 予約データを一時保存（日時調整中ステータス）
-      const tempBookingData = {
-        requestId: requestId,
-        userId: userId,
-        userName: name,
-        desiredDateTime: desiredDateTime,
-        course: course,
-        phone: phone,
-        postalCode: postalCode,
-        address: address,
-        status: '日時調整中',
-        originalDateTime: desiredDateTime,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      saveBooking(requestId, tempBookingData);
-
-      // 空き時間を取得
-      const suggestions = findAvailableSlots(reservationDate, course);
-
-      if (suggestions.length > 0) {
-        // クイックリプライで空き時間を提案
-        const quickReplyItems = suggestions.slice(0, 10).map(slot => ({
-          type: 'action',
-          action: {
-            type: 'postback',
-            label: slot.replace(/^\d{4}-/, '').replace(' ', ' '),
-            data: `reschedule_${requestId}_${slot}`
-          }
-        }));
-
-        // キャンセルボタンも追加
-        quickReplyItems.push({
-          type: 'action',
-          action: {
-            type: 'postback',
-            label: 'キャンセル',
-            data: `cancel_reschedule_${requestId}`
-          }
-        });
-
-        const rescheduleMessage = {
-          type: 'text',
-          text: `申し訳ございません。\n${availability.reason}\n\n以下の空き時間はいかがですか？`,
-          quickReply: {
-            items: quickReplyItems
-          }
-        };
-
-        sendLineMessage(userId, [rescheduleMessage]);
-        logAction('日時調整提案', userId, `${requestId} - 空き${suggestions.length}件`);
-      } else {
-        // 空き時間がない場合
-        const noSlotMessage = `申し訳ございません。\n${availability.reason}\n\n本日の空き時間がありません。\n別の日で再度お申し込みください。`;
-        sendLineMessage(userId, [{ type: 'text', text: noSlotMessage }]);
-        logAction('予約リクエスト却下', userId, `${desiredDateTime} - 空きなし`);
-      }
+      const errorMessage = `申し訳ございません。\n\n${availability.reason}\n\n恐れ入りますが、再度フォームより別の日時でお申し込みください。`;
+      sendLineMessage(userId, [{ type: 'text', text: errorMessage }]);
+      logAction('予約リクエスト却下', userId, `${desiredDateTime} - ${availability.reason}`);
 
       const duration = Date.now() - startTime;
-      console.log(`=== カレンダー重複 - クイックリプライ送信完了 (${duration}ms) ===`);
+      console.log(`=== カレンダー重複 - エラーメッセージ送信完了 (${duration}ms) ===`);
       return;
     }
 
@@ -839,7 +812,7 @@ function handleInitialFormSubmit(e) {
               `━━━━━━━━━━━━━━\n` +
               `${name} 様\n` +
               `━━━━━━━━━━━━━━\n\n` +
-              `📅 ${dateStr} ${desiredTime}\n` +
+              `📅 ${dateStr} ${timeStr}\n` +
               `💼 ${course}\n\n` +
               `📞 ${phone}\n` +
               `🏠 ${postalCode}\n${address}\n` +

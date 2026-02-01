@@ -758,18 +758,18 @@ function autoMaintenance() {
 // ============================================
 
 /**
- * フォームの日付選択肢を空いている日のみに更新
- * ※ 日付ピッカーではなくドロップダウン型の場合のみ有効
+ * フォームの日時選択肢を空いている日時のみに更新
+ * 「希望日時」の選択肢を「2026/2/1(土) 12:00」形式で設定
  *
  * トリガー設定推奨:
- * - 毎朝6時に実行（時間主導型トリガー）
+ * - 1時間ごとに実行（時間主導型トリガー）
  * - 予約確定時にも呼び出し（approveReservation内）
  */
 function updateFormDateChoices() {
   const startTime = Date.now();
 
   try {
-    console.log('=== フォーム日付選択肢更新開始 ===');
+    console.log('=== フォーム日時選択肢更新開始 ===');
 
     // フォームの編集用IDが必要（config.gsに設定が必要）
     const formEditId = CONFIG.FORM.BOOKING.EDIT_ID;
@@ -784,53 +784,96 @@ function updateFormDateChoices() {
       return;
     }
 
-    // 「希望日」の質問を探す
+    // 「希望日時」または「希望日」の質問を探す
     const items = form.getItems();
-    let dateItem = null;
+    let dateTimeItem = null;
 
     for (const item of items) {
-      if (item.getTitle() === '希望日') {
+      const title = item.getTitle();
+      if (title === '希望日時' || title === '希望日') {
         // ドロップダウン型の場合のみ処理
         if (item.getType() === FormApp.ItemType.LIST) {
-          dateItem = item.asListItem();
+          dateTimeItem = item.asListItem();
           break;
         } else if (item.getType() === FormApp.ItemType.MULTIPLE_CHOICE) {
-          dateItem = item.asMultipleChoiceItem();
+          dateTimeItem = item.asMultipleChoiceItem();
           break;
         } else {
-          console.log('希望日は日付ピッカー型です。選択肢更新はスキップします。');
+          console.log('希望日時は日付ピッカー型です。選択肢更新はスキップします。');
           return;
         }
       }
     }
 
-    if (!dateItem) {
-      console.log('希望日の質問が見つかりません');
+    if (!dateTimeItem) {
+      console.log('希望日時/希望日の質問が見つかりません');
       return;
     }
 
-    // 空いている日を取得（14日間）
-    const availableDates = getAvailableDates(14);
+    // 空いている日時スロットを取得（14日間）
+    const availableDateTimeSlots = getAvailableDateTimeSlots(14);
 
-    if (availableDates.length === 0) {
-      console.warn('空いている日がありません');
+    if (availableDateTimeSlots.length === 0) {
+      console.warn('空いている日時がありません');
       return;
     }
 
     // 選択肢を更新
-    const choices = availableDates.map(date => dateItem.createChoice(date));
-    dateItem.setChoices(choices);
+    const choices = availableDateTimeSlots.map(slot => dateTimeItem.createChoice(slot));
+    dateTimeItem.setChoices(choices);
 
     const duration = Date.now() - startTime;
-    console.log(`=== フォーム日付選択肢更新完了 (${duration}ms): ${availableDates.length}日 ===`);
+    console.log(`=== フォーム日時選択肢更新完了 (${duration}ms): ${availableDateTimeSlots.length}スロット ===`);
 
-    logAction('フォーム選択肢更新', 'system', `${availableDates.length}日`);
+    logAction('フォーム選択肢更新', 'system', `${availableDateTimeSlots.length}スロット`);
 
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error(`updateFormDateChoices error (${duration}ms):`, error);
     logError('フォーム選択肢更新エラー', error.toString());
   }
+}
+
+/**
+ * 全ての予約可能な日時スロットを取得
+ * @param {number} days - 何日先までチェックするか
+ * @returns {string[]} - 空いている日時の配列（例: ["2026/2/1(土) 12:00", "2026/2/1(土) 14:00"]）
+ */
+function getAvailableDateTimeSlots(days) {
+  const availableSlots = [];
+  const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+
+  try {
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // 当日から指定日数分チェック
+    for (let i = 0; i <= days; i++) {
+      const checkDate = new Date(today);
+      checkDate.setDate(today.getDate() + i);
+
+      // その日の空き時間スロットを取得
+      const timeSlots = getAvailableTimeSlots(checkDate);
+
+      if (timeSlots.length > 0) {
+        const year = checkDate.getFullYear();
+        const month = checkDate.getMonth() + 1;
+        const date = checkDate.getDate();
+        const dayName = dayNames[checkDate.getDay()];
+
+        // 日付+時間の形式で追加
+        for (const time of timeSlots) {
+          availableSlots.push(`${year}/${month}/${date}(${dayName}) ${time}`);
+        }
+      }
+    }
+
+  } catch (error) {
+    console.error('getAvailableDateTimeSlots error:', error);
+  }
+
+  return availableSlots;
 }
 
 /**
