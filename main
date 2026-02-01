@@ -1005,7 +1005,6 @@ function showTimeSelection(requestId, dateStr, offset, replyToken, userId) {
     const availableTimes = getAvailableTimesForDate(dateStr, booking.course);
 
     if (availableTimes.length === 0) {
-    if (availableTimes.length === 0) {
        const msg = { type: 'text', text: '申し訳ございません。\n選択された日は満席などで予約できません。\n\n恐れ入りますが、他の日付を選択してください。' };
        if(replyToken) replyLineMessage(replyToken, [msg]);
        else sendLineMessage(userId, [msg]);
