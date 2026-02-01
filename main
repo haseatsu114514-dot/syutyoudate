@@ -248,154 +248,24 @@ function handlePostback(event) {
 
     rejectReservation(requestId, userId);
   }
-  // 日時変更処理（ユーザー - 弾かれ救済用）
-  else if (data.startsWith('reschedule_')) {
-    // reschedule_{requestId}_{datetime}
-    const parts = data.replace('reschedule_', '').split('_');
+  // 日付選択処理（ユーザー）
+  else if (data.startsWith('select_date_')) {
+    // select_date_{requestId}_{date}
+    const parts = data.replace('select_date_', '').split('_');
     const requestId = parts[0];
-    const newDateTime = parts.slice(1).join('_'); // 日時に_が含まれる可能性を考慮
+    const selectedDate = parts.slice(1).join('_'); // 日付形式を復元
 
-    // ★最速返信
-    replyLineMessage(replyToken, [{
-      type: 'text',
-      text: `${newDateTime} で予約リクエストを送信しています...`
-    }]);
-
-    handleReschedule(requestId, newDateTime, userId);
+    handleDateSelection(requestId, selectedDate, userId, replyToken);
   }
-  // 日時変更キャンセル（ユーザー）
-  else if (data.startsWith('cancel_reschedule_')) {
-    const requestId = data.replace('cancel_reschedule_', '');
+  // 時間選択処理（ユーザー）
+  else if (data.startsWith('select_time_')) {
+    // select_time_{requestId}_{date}_{time}
+    const parts = data.replace('select_time_', '').split('_');
+    const requestId = parts[0];
+    const selectedDate = parts.slice(1, -1).join('_'); // 日付部分
+    const selectedTime = parts[parts.length - 1]; // 時間部分
 
-    // ★最速返信
-    replyLineMessage(replyToken, [{
-      type: 'text',
-      text: `予約リクエストをキャンセルしました。\n\n別の日時で再度お申し込みください。`
-    }]);
-
-    // 予約データを削除または「キャンセル」ステータスに更新
-    handleRescheduleCancel(requestId, userId);
-  }
-}
-
-/**
- * 日時変更処理（弾かれ救済用）
- * ユーザーがクイックリプライで新しい日時を選択した時の処理
- */
-function handleReschedule(requestId, newDateTime, userId) {
-  const startTime = Date.now();
-
-  try {
-    console.log('=== 日時変更処理開始 ===');
-    console.log('受付番号:', requestId, '新日時:', newDateTime);
-
-    const booking = getBooking(requestId);
-
-    if (!booking) {
-      console.error('予約が見つかりません');
-      sendLineMessage(userId, [{
-        type: 'text',
-        text: `エラー: 予約が見つかりません。再度フォームからお申し込みください。`
-      }]);
-      return;
-    }
-
-    // 日時を更新
-    booking.desiredDateTime = newDateTime;
-    booking.status = '承認待ち';
-    booking.updatedAt = new Date().toISOString();
-
-    const saved = saveBooking(requestId, booking);
-
-    if (!saved) {
-      console.error('予約更新に失敗');
-      sendLineMessage(userId, [{
-        type: 'text',
-        text: `エラー: 予約の更新に失敗しました。再度お試しください。`
-      }]);
-      return;
-    }
-
-    // 管理者に承認リクエストを送信
-    const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
-    const name = booking.userName || '（未設定）';
-
-    const adminMessages = [
-      {
-        type: 'text',
-        text: `新規予約リクエスト（日時変更）\n\n` +
-              `━━━━━━━━━━━━━━\n` +
-              `${name} 様\n` +
-              `━━━━━━━━━━━━━━\n\n` +
-              `📅 ${newDateTime}\n` +
-              `💼 ${booking.course}\n\n` +
-              `📞 ${booking.phone}\n` +
-              `🏠 ${booking.postalCode}\n${booking.address}\n` +
-              `━━━━━━━━━━━━━━\n` +
-              `※ 元の希望日時: ${booking.originalDateTime || '不明'}`
-      },
-      {
-        type: 'template',
-        altText: '予約の確認',
-        template: {
-          type: 'confirm',
-          text: `この予約を受け付けますか？`,
-          actions: [
-            {
-              type: 'postback',
-              label: '受け付ける',
-              data: `approve_${requestId}`
-            },
-            {
-              type: 'postback',
-              label: 'お断りする',
-              data: `reject_${requestId}`
-            }
-          ]
-        }
-      }
-    ];
-
-    const adminSent = sendLineMessage(CONFIG.ADMIN_USER_ID, adminMessages, adminToken);
-    console.log('管理者通知送信結果:', adminSent ? '成功' : '失敗');
-
-    logAction('日時変更リクエスト', userId, `${requestId} → ${newDateTime}`);
-
-    const duration = Date.now() - startTime;
-    console.log(`=== 日時変更処理完了 (${duration}ms) ===`);
-
-  } catch (error) {
-    console.error('handleReschedule error:', error);
-    logError('日時変更処理エラー', error.toString());
-    sendLineMessage(userId, [{
-      type: 'text',
-      text: `エラーが発生しました。再度フォームからお申し込みください。`
-    }]);
-  }
-}
-
-/**
- * 日時変更キャンセル処理
- */
-function handleRescheduleCancel(requestId, userId) {
-  try {
-    console.log('=== 日時変更キャンセル処理 ===');
-    console.log('受付番号:', requestId);
-
-    const booking = getBooking(requestId);
-
-    if (booking) {
-      booking.status = 'キャンセル';
-      booking.cancelledAt = new Date().toISOString();
-      booking.updatedAt = new Date().toISOString();
-      saveBooking(requestId, booking);
-    }
-
-    logAction('日時変更キャンセル', userId, requestId);
-
-  } catch (error) {
-    console.error('handleRescheduleCancel error:', error);
-    logError('日時変更キャンセルエラー', error.toString());
+    handleTimeSelection(requestId, selectedDate, selectedTime, userId, replyToken);
   }
 }
 
@@ -651,8 +521,8 @@ function onFormSubmit(e) {
 }
 
 /**
- * 予約フォーム送信処理（フォーム1回完結版）
- * 全情報を1回のフォームで取得し、承認後は即確定
+ * 予約フォーム送信処理（LINE日時選択版）
+ * フォームで個人情報のみ取得、日時はLINEで選択
  */
 function handleInitialFormSubmit(e) {
   const startTime = Date.now();
@@ -662,7 +532,7 @@ function handleInitialFormSubmit(e) {
 
     const data = e.namedValues;
 
-    // ヘルパ関数: 値を安全に取得（undefined/null/空文字の場合はデフォルト値を返す）
+    // ヘルパ関数: 値を安全に取得
     const getValue = (key, defaultVal = '') => {
       return (data[key] && data[key][0]) ? data[key][0] : defaultVal;
     };
@@ -672,137 +542,282 @@ function handleInitialFormSubmit(e) {
     const name = getValue('お名前', '（未入力）');
     const course = getValue('コース', null);
 
-    // 日時情報（新形式: 「希望日時」統合形式 または 旧形式: 「希望日」+「希望時刻」）
-    let desiredDateTimeRaw = getValue('希望日時', null);
-    const desiredDate = getValue('希望日', null);
-    const desiredTime = getValue('希望時刻', null);
-
     // 連絡先情報
     const phone = getValue('電話番号', '未入力');
     const postalCode = getValue('郵便番号', '');
     const address = getValue('ご住所', '未入力');
 
-    console.log('受信データ - userId:', userId, 'dateTime:', desiredDateTimeRaw, 'date:', desiredDate, 'time:', desiredTime);
+    console.log('受信データ - userId:', userId, 'name:', name, 'course:', course);
     console.log('連絡先情報 - phone:', phone ? '入力あり' : 'なし', 'address:', address ? '入力あり' : 'なし');
 
-    // 必須項目チェック（新形式または旧形式のいずれかが必要）
-    const hasDateTime = desiredDateTimeRaw !== null;
-    const hasDateAndTime = desiredDate !== null && desiredTime !== null;
-
-    if (!userId || (!hasDateTime && !hasDateAndTime) || !course || !phone || !address) {
-      console.error('必須項目不足 - userId:', userId, 'dateTime:', desiredDateTimeRaw, 'date:', desiredDate, 'time:', desiredTime, 'course:', course, 'phone:', phone, 'address:', address);
+    // 必須項目チェック
+    if (!userId || !course || !phone || !address) {
+      console.error('必須項目不足 - userId:', userId, 'course:', course, 'phone:', phone, 'address:', address);
       return;
     }
 
-    // 日時フォーマットの整形
-    let dateStr;
-    let timeStr;
-    let reservationDate;
-
-    if (hasDateTime) {
-      // 新形式: "2026/2/1(土) 12:00" をパース
-      const dateTimeMatch = desiredDateTimeRaw.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\([日月火水木金土]\)\s+(\d{1,2}):(\d{2})$/);
-
-      if (dateTimeMatch) {
-        const year = parseInt(dateTimeMatch[1], 10);
-        const month = parseInt(dateTimeMatch[2], 10);
-        const day = parseInt(dateTimeMatch[3], 10);
-        const hour = parseInt(dateTimeMatch[4], 10);
-        const minute = parseInt(dateTimeMatch[5], 10);
-
-        reservationDate = new Date(year, month - 1, day, hour, minute, 0, 0);
-        dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-      } else {
-        console.error('希望日時のパースに失敗:', desiredDateTimeRaw);
-        return;
-      }
-    } else {
-      // 旧形式: 「希望日」+「希望時刻」（後方互換性）
-      if (desiredDate instanceof Date || typeof desiredDate === 'object') {
-        reservationDate = new Date(desiredDate);
-        dateStr = `${reservationDate.getFullYear()}-${String(reservationDate.getMonth() + 1).padStart(2, '0')}-${String(reservationDate.getDate()).padStart(2, '0')}`;
-      } else {
-        const dateMatchWithYear = desiredDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
-        const dateMatchNoYear = desiredDate.match(/^(\d{1,2})\/(\d{1,2})/);
-
-        if (dateMatchWithYear) {
-          const year = parseInt(dateMatchWithYear[1], 10);
-          const month = parseInt(dateMatchWithYear[2], 10);
-          const day = parseInt(dateMatchWithYear[3], 10);
-          reservationDate = new Date(year, month - 1, day);
-          dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        } else if (dateMatchNoYear) {
-          const month = parseInt(dateMatchNoYear[1], 10);
-          const day = parseInt(dateMatchNoYear[2], 10);
-          const year = new Date().getFullYear();
-          const currentMonth = new Date().getMonth() + 1;
-          const actualYear = (month < currentMonth && currentMonth >= 11) ? year + 1 : year;
-          reservationDate = new Date(actualYear, month - 1, day);
-          dateStr = `${actualYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        } else {
-          reservationDate = new Date(desiredDate);
-          dateStr = desiredDate;
-        }
-      }
-
-      // 時刻を追加
-      const timeMatch = desiredTime.match(/(\d{1,2}):(\d{2})/);
-      if (timeMatch && reservationDate) {
-        reservationDate.setHours(parseInt(timeMatch[1], 10), parseInt(timeMatch[2], 10), 0, 0);
-        timeStr = desiredTime;
-      }
-    }
-
-    const desiredDateTime = `${dateStr} ${timeStr}`;
     const requestId = generateRequestId();
 
-    console.log('パース結果 - dateStr:', dateStr, 'timeStr:', timeStr, 'reservationDate:', reservationDate);
-
-    // ★★★ 高速カレンダーチェック ★★★
-    const availability = checkCalendarFast(reservationDate, course);
-
-    // 既に予約が入っている場合 → シンプルなエラーメッセージ
-    if (!availability.available) {
-      console.log('カレンダーに予約あり - 予約不可メッセージを送信');
-
-      const errorMessage = `申し訳ございません。\n\n${availability.reason}\n\n恐れ入りますが、再度フォームより別の日時でお申し込みください。`;
-      sendLineMessage(userId, [{ type: 'text', text: errorMessage }]);
-      logAction('予約リクエスト却下', userId, `${desiredDateTime} - ${availability.reason}`);
-
-      const duration = Date.now() - startTime;
-      console.log(`=== カレンダー重複 - エラーメッセージ送信完了 (${duration}ms) ===`);
-      return;
-    }
-
-    // カレンダーが空いている場合
-    console.log('カレンダー空きあり - 予約リクエストを受け付け');
-
-    // ★ユーザーへ受付完了通知（Push API - 有料1通目）
-    const userReceiptMessage = 'ご予約リクエストを承りました。\n\n' +
-                               '内容を確認後、担当者より改めて「予約確定」のご連絡をいたします。\n' + 
-                               '（※まだ予約は確定しておりません）\n\n' +
-                               '通知が届くまで、しばらくお待ちください。';
-    
-    sendLineMessage(userId, [{ type: 'text', text: userReceiptMessage }]);
-    logAction('受付完了通知送信', userId, '有料メッセージ');
-
-    // ★ 予約データ保存（全情報を含む）
+    // ★ 予約データを一時保存（日時は後で選択）
     saveBooking(requestId, {
       requestId: requestId,
       userId: userId,
       userName: name,
-      desiredDateTime: desiredDateTime,
+      desiredDateTime: null, // 後で設定
       course: course,
       phone: phone,
       postalCode: postalCode,
       address: address,
-      status: '承認待ち',
+      status: '日時選択中',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
 
-    // ★ 管理者への通知（全情報を表示）
+    // ★ 空いている日を取得（14日間）
+    const availableDates = getAvailableDates(14);
+
+    if (availableDates.length === 0) {
+      // 空きがない場合
+      sendLineMessage(userId, [{
+        type: 'text',
+        text: '申し訳ございません。\n\n現在、予約可能な日程がありません。\n\n後日改めてお申し込みください。'
+      }]);
+      logAction('予約不可', userId, '空き日程なし');
+      return;
+    }
+
+    // ★ クイックリプライで日付選択を表示（Push API - 有料1通目）
+    const quickReplyItems = availableDates.slice(0, 13).map(date => ({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: date.replace(/^\d{4}\//, ''), // 年を除去して表示
+        data: `select_date_${requestId}_${date}`
+      }
+    }));
+
+    const dateSelectMessage = {
+      type: 'text',
+      text: `${name} 様\n\nフォームを受け付けました。\n\n続けて、ご希望の日付を選択してください。`,
+      quickReply: {
+        items: quickReplyItems
+      }
+    };
+
+    sendLineMessage(userId, [dateSelectMessage]);
+    logAction('日付選択送信', userId, requestId);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 予約フォーム処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    console.error(`handleInitialFormSubmit error:`, error);
+    logError('予約フォーム処理エラー', error.toString());
+  }
+}
+
+/**
+ * 日付選択処理（クイックリプライから）
+ */
+function handleDateSelection(requestId, selectedDate, userId, replyToken) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 日付選択処理開始 ===');
+    console.log('受付番号:', requestId, '選択日:', selectedDate);
+
+    const booking = getBooking(requestId);
+
+    if (!booking) {
+      console.error('予約が見つかりません');
+      replyLineMessage(replyToken, [{
+        type: 'text',
+        text: 'エラー: 予約情報が見つかりません。\n再度フォームからお申し込みください。'
+      }]);
+      return;
+    }
+
+    // 選択された日付をパース
+    const dateMatch = selectedDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    if (!dateMatch) {
+      console.error('日付パースエラー:', selectedDate);
+      replyLineMessage(replyToken, [{
+        type: 'text',
+        text: 'エラー: 日付の形式が不正です。\n再度フォームからお申し込みください。'
+      }]);
+      return;
+    }
+
+    const year = parseInt(dateMatch[1], 10);
+    const month = parseInt(dateMatch[2], 10);
+    const day = parseInt(dateMatch[3], 10);
+    const targetDate = new Date(year, month - 1, day);
+
+    // その日の空き時間を取得
+    const availableTimeSlots = getAvailableTimeSlots(targetDate);
+
+    if (availableTimeSlots.length === 0) {
+      // 空き時間がない場合（タイミングで埋まった可能性）
+      replyLineMessage(replyToken, [{
+        type: 'text',
+        text: `申し訳ございません。\n\n${selectedDate} は予約が埋まってしまいました。\n\n別の日を選択してください。`
+      }]);
+
+      // 再度日付選択を送信
+      const availableDates = getAvailableDates(14);
+      if (availableDates.length > 0) {
+        const quickReplyItems = availableDates.slice(0, 13).map(date => ({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: date.replace(/^\d{4}\//, ''),
+            data: `select_date_${requestId}_${date}`
+          }
+        }));
+
+        sendLineMessage(userId, [{
+          type: 'text',
+          text: '別の日付を選択してください。',
+          quickReply: { items: quickReplyItems }
+        }]);
+      }
+      return;
+    }
+
+    // 予約データに選択日を一時保存
+    booking.selectedDate = selectedDate;
+    booking.updatedAt = new Date().toISOString();
+    saveBooking(requestId, booking);
+
+    // ★ クイックリプライで時間選択を表示（Reply API - 無料）
+    const quickReplyItems = availableTimeSlots.slice(0, 13).map(time => ({
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: time,
+        data: `select_time_${requestId}_${selectedDate}_${time}`
+      }
+    }));
+
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: `${selectedDate} の空き時間です。\n\nご希望の時間を選択してください。`,
+      quickReply: {
+        items: quickReplyItems
+      }
+    }]);
+
+    logAction('時間選択送信', userId, `${requestId} - ${selectedDate}`);
+
+    const duration = Date.now() - startTime;
+    console.log(`=== 日付選択処理完了 (${duration}ms) ===`);
+
+  } catch (error) {
+    console.error('handleDateSelection error:', error);
+    logError('日付選択処理エラー', error.toString());
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: 'エラーが発生しました。\n再度フォームからお申し込みください。'
+    }]);
+  }
+}
+
+/**
+ * 時間選択処理（クイックリプライから）
+ */
+function handleTimeSelection(requestId, selectedDate, selectedTime, userId, replyToken) {
+  const startTime = Date.now();
+
+  try {
+    console.log('=== 時間選択処理開始 ===');
+    console.log('受付番号:', requestId, '日時:', selectedDate, selectedTime);
+
+    const booking = getBooking(requestId);
+
+    if (!booking) {
+      console.error('予約が見つかりません');
+      replyLineMessage(replyToken, [{
+        type: 'text',
+        text: 'エラー: 予約情報が見つかりません。\n再度フォームからお申し込みください。'
+      }]);
+      return;
+    }
+
+    // 日時をパースしてカレンダーチェック
+    const dateMatch = selectedDate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    const timeMatch = selectedTime.match(/^(\d{1,2}):(\d{2})$/);
+
+    if (!dateMatch || !timeMatch) {
+      console.error('日時パースエラー:', selectedDate, selectedTime);
+      replyLineMessage(replyToken, [{
+        type: 'text',
+        text: 'エラー: 日時の形式が不正です。\n再度フォームからお申し込みください。'
+      }]);
+      return;
+    }
+
+    const year = parseInt(dateMatch[1], 10);
+    const month = parseInt(dateMatch[2], 10);
+    const day = parseInt(dateMatch[3], 10);
+    const hour = parseInt(timeMatch[1], 10);
+    const minute = parseInt(timeMatch[2], 10);
+
+    const reservationDate = new Date(year, month - 1, day, hour, minute, 0, 0);
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const desiredDateTime = `${dateStr} ${selectedTime}`;
+
+    // ★ 最終カレンダーチェック（念のため）
+    const availability = checkCalendarFast(reservationDate, booking.course);
+
+    if (!availability.available) {
+      replyLineMessage(replyToken, [{
+        type: 'text',
+        text: `申し訳ございません。\n\n${availability.reason}\n\n別の時間を選択してください。`
+      }]);
+
+      // 再度時間選択を送信
+      const targetDate = new Date(year, month - 1, day);
+      const availableTimeSlots = getAvailableTimeSlots(targetDate);
+
+      if (availableTimeSlots.length > 0) {
+        const quickReplyItems = availableTimeSlots.slice(0, 13).map(time => ({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: time,
+            data: `select_time_${requestId}_${selectedDate}_${time}`
+          }
+        }));
+
+        sendLineMessage(userId, [{
+          type: 'text',
+          text: '別の時間を選択してください。',
+          quickReply: { items: quickReplyItems }
+        }]);
+      }
+      return;
+    }
+
+    // ★ 予約データを更新
+    booking.desiredDateTime = desiredDateTime;
+    booking.status = '承認待ち';
+    booking.updatedAt = new Date().toISOString();
+    saveBooking(requestId, booking);
+
+    // ★ ユーザーへ受付完了メッセージ（Reply API - 無料）
+    const name = booking.userName || '（未設定）';
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: `${name} 様\n\nご予約リクエストを承りました。\n\n` +
+            `━━━━━━━━━━━━━━\n` +
+            `📅 ${desiredDateTime}\n` +
+            `💼 ${booking.course}\n` +
+            `━━━━━━━━━━━━━━\n\n` +
+            `内容を確認後、担当者より「予約確定」のご連絡をいたします。\n\n` +
+            `（※まだ予約は確定しておりません）`
+    }]);
+
+    // ★ 管理者への通知（Push API）
     const adminToken = CONFIG.ADMIN_BOT_TOKEN || null;
 
     const adminMessages = [
@@ -812,10 +827,10 @@ function handleInitialFormSubmit(e) {
               `━━━━━━━━━━━━━━\n` +
               `${name} 様\n` +
               `━━━━━━━━━━━━━━\n\n` +
-              `📅 ${dateStr} ${timeStr}\n` +
-              `💼 ${course}\n\n` +
-              `📞 ${phone}\n` +
-              `🏠 ${postalCode}\n${address}\n` +
+              `📅 ${desiredDateTime}\n` +
+              `💼 ${booking.course}\n\n` +
+              `📞 ${booking.phone}\n` +
+              `🏠 ${booking.postalCode}\n${booking.address}\n` +
               `━━━━━━━━━━━━━━`
       },
       {
@@ -823,7 +838,7 @@ function handleInitialFormSubmit(e) {
         altText: '予約の確認',
         template: {
           type: 'confirm',
-          text: `この予約を受け付けますか？`,
+          text: 'この予約を受け付けますか？',
           actions: [
             {
               type: 'postback',
@@ -840,17 +855,20 @@ function handleInitialFormSubmit(e) {
       }
     ];
 
-    const adminSent = sendLineMessage(CONFIG.ADMIN_USER_ID, adminMessages, adminToken);
-    console.log('管理者通知送信結果:', adminSent ? '成功' : '失敗');
+    sendLineMessage(CONFIG.ADMIN_USER_ID, adminMessages, adminToken);
 
-    logAction('予約リクエスト受信', userId, requestId);
+    logAction('予約リクエスト受信', userId, `${requestId} - ${desiredDateTime}`);
 
     const duration = Date.now() - startTime;
-    console.log(`=== 予約フォーム処理完了 (${duration}ms) ===`);
+    console.log(`=== 時間選択処理完了 (${duration}ms) ===`);
 
   } catch (error) {
-    console.error(`handleInitialFormSubmit error:`, error);
-    logError('予約フォーム処理エラー', error.toString());
+    console.error('handleTimeSelection error:', error);
+    logError('時間選択処理エラー', error.toString());
+    replyLineMessage(replyToken, [{
+      type: 'text',
+      text: 'エラーが発生しました。\n再度フォームからお申し込みください。'
+    }]);
   }
 }
 
