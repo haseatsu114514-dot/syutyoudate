@@ -900,10 +900,9 @@ function showCourseSelection(requestId, userId, replyToken) {
   const courseNames = Object.keys(CONFIG.COURSES);
   
   const actions = courseNames.map(name => {
-    const course = CONFIG.COURSES[name];
     return {
       type: 'postback',
-      label: `${name} (${course.price}円)`,
+      label: name,  // コース名のみ（20文字制限対応）
       data: `select_course_${requestId}_${name}`
     };
   });
