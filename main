@@ -1139,7 +1139,7 @@ function handleTimeSelection(requestId, timeStr, userId, replyToken) {
       altText: '予約情報の入力',
       template: {
         type: 'buttons',
-        text: `【日時を選択しました】\n${desiredDateTime}\n\n以下のボタンから個人情報を入力して予約リクエストを完了させてください。`,
+        text: `【この時間を一時的に確保しています】\n${desiredDateTime}\n\n他のお客様が予約できないよう、枠を仮押さえしました。\n30分以内に以下のボタンから予約を完了させてください。`,
         actions: [
           {
             type: 'uri',
