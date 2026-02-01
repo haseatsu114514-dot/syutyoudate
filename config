@@ -33,12 +33,12 @@ const CONFIG = {
   // コース設定
   // ============================================
   COURSES: {
-    'テストコース(60分)': {
+    'Aコース(60分)': {
       duration: 60,
       bufferBefore: 90,
       bufferAfter: 90
     },
-    'テストコース(90分)': {
+    'Bコース(90分)': {
       duration: 90,
       bufferBefore: 90,
       bufferAfter: 90

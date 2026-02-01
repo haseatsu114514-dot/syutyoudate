@@ -926,6 +926,89 @@ function getAvailableDates(days) {
 }
 
 /**
+ * 指定した日付の空き時間を取得
+ * @param {string} dateStr - 日付文字列 (例: "2026/02/01")
+ * @param {string} course - コース名
+ * @returns {string[]} - 空いている時間の配列 (例: ["12:00", "12:30"])
+ */
+function getAvailableTimesForDate(dateStr, course) {
+  const availableTimes = [];
+  
+  try {
+    // 日付文字列をDateオブジェクトに変換
+    // "2026/2/1(土)" のような形式から日付部分を抽出
+    let targetDate;
+    const dateMatch = dateStr.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    
+    if (dateMatch) {
+      targetDate = new Date(parseInt(dateMatch[1]), parseInt(dateMatch[2]) - 1, parseInt(dateMatch[3]));
+    } else {
+      console.error('getAvailableTimesForDate: Invalid date format', dateStr);
+      return [];
+    }
+    
+    // コース情報の取得
+    const courseConfig = CONFIG.COURSES[course];
+    if (!courseConfig) {
+      console.error('getAvailableTimesForDate: Invalid course', course);
+      return [];
+    }
+
+    const minDuration = courseConfig.duration || 60;
+    const calendar = CalendarApp.getCalendarById(CONFIG.CALENDAR_IDS[0]);
+    if (!calendar) return [];
+
+    // 開始・終了時間の設定
+    const startTime = new Date(targetDate);
+    startTime.setHours(CONFIG.BUSINESS_HOURS.START, 0, 0, 0);
+    
+    const endTime = new Date(targetDate);
+    endTime.setHours(CONFIG.BUSINESS_HOURS.END, 0, 0, 0);
+    
+    // 検索範囲のイベントを一度に取得
+    const events = calendar.getEvents(startTime, endTime);
+    
+    // 30分刻みでスキャン
+    let currentTime = new Date(startTime);
+    const now = new Date();
+    
+    // 予約締切時間（5時間前）
+    // const deadlineHours = CONFIG.BOOKING_DEADLINE_HOURS;
+    
+    while (currentTime.getTime() + (minDuration * 60 * 1000) <= endTime.getTime()) {
+      
+      // 過去の時間は除外
+      if (currentTime <= now) {
+        currentTime = new Date(currentTime.getTime() + 30 * 60 * 1000);
+        continue;
+      }
+      
+      // 締切チェック
+      const deadlineTime = new Date(currentTime.getTime() - CONFIG.BOOKING_DEADLINE_HOURS * 60 * 60 * 1000);
+      if (now > deadlineTime) {
+        currentTime = new Date(currentTime.getTime() + 30 * 60 * 1000);
+        continue;
+      }
+      
+      // メモリ上で空き状況チェック
+      if (isSlotAvailableOnMemory(currentTime, course, events)) {
+        const hours = String(currentTime.getHours()).padStart(2, '0');
+        const minutes = String(currentTime.getMinutes()).padStart(2, '0');
+        availableTimes.push(`${hours}:${minutes}`);
+      }
+      
+      // 30分進める
+      currentTime = new Date(currentTime.getTime() + 30 * 60 * 1000);
+    }
+    
+  } catch (error) {
+    console.error('getAvailableTimesForDate error:', error);
+  }
+  
+  return availableTimes;
+}
+
+/**
  * 手動でフォーム選択肢を更新するためのテスト関数
  */
 function testUpdateFormChoices() {
