@@ -1036,4 +1036,42 @@ function getAllPendingBookings() {
   }
 }
 
+/**
+ * 特定ユーザーの入力待ち(FormPending/DatePending/TimePending/CoursePending)の予約を検索
+ * 最新のものを返す
+ */
+function findPendingBooking(userId) {
+  try {
+     const props = PropertiesService.getScriptProperties();
+     const indexData = props.getProperty('booking_index');
+     if (!indexData) return null;
+
+     const requestIds = JSON.parse(indexData);
+     // 最新から探す (直近50件で十分)
+     const searchLimit = Math.min(requestIds.length, 50);
+     for (let i = requestIds.length - 1; i >= requestIds.length - searchLimit; i--) {
+        const requestId = requestIds[i];
+        const data = props.getProperty(`booking_${requestId}`);
+        if(data) {
+           try {
+             const booking = JSON.parse(data);
+             if (booking.userId === userId) {
+                // 完了していないステータスなら返す
+                 const activeStatuses = ['CoursePending', 'DatePending', 'TimePending', 'FormPending'];
+                 if (activeStatuses.includes(booking.status)) {
+                     return booking;
+                 }
+             }
+           } catch (parseError) {
+             console.error('json parse error in findPendingBooking:', parseError);
+           }
+        }
+     }
+     return null;
+  } catch(e) {
+     console.error('findPendingBooking error:', e);
+     return null;
+  }
+}
+
 
