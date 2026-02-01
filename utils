@@ -757,81 +757,7 @@ function autoMaintenance() {
 // フォーム選択肢更新機能
 // ============================================
 
-/**
- * フォームの日付選択肢を空いている日のみに更新
- * ※ 日付ピッカーではなくドロップダウン型の場合のみ有効
- *
- * トリガー設定推奨:
- * - 毎朝6時に実行（時間主導型トリガー）
- * - 予約確定時にも呼び出し（approveReservation内）
- */
-function updateFormDateChoices() {
-  const startTime = Date.now();
 
-  try {
-    console.log('=== フォーム日付選択肢更新開始 ===');
-
-    // フォームの編集用IDが必要（config.gsに設定が必要）
-    const formEditId = CONFIG.FORM.BOOKING.EDIT_ID;
-    if (!formEditId) {
-      console.log('フォーム編集IDが設定されていません。スキップします。');
-      return;
-    }
-
-    const form = FormApp.openById(formEditId);
-    if (!form) {
-      console.error('フォームが見つかりません');
-      return;
-    }
-
-    // 「希望日」の質問を探す
-    const items = form.getItems();
-    let dateItem = null;
-
-    for (const item of items) {
-      if (item.getTitle() === '希望日') {
-        // ドロップダウン型の場合のみ処理
-        if (item.getType() === FormApp.ItemType.LIST) {
-          dateItem = item.asListItem();
-          break;
-        } else if (item.getType() === FormApp.ItemType.MULTIPLE_CHOICE) {
-          dateItem = item.asMultipleChoiceItem();
-          break;
-        } else {
-          console.log('希望日は日付ピッカー型です。選択肢更新はスキップします。');
-          return;
-        }
-      }
-    }
-
-    if (!dateItem) {
-      console.log('希望日の質問が見つかりません');
-      return;
-    }
-
-    // 空いている日を取得（14日間）
-    const availableDates = getAvailableDates(14);
-
-    if (availableDates.length === 0) {
-      console.warn('空いている日がありません');
-      return;
-    }
-
-    // 選択肢を更新
-    const choices = availableDates.map(date => dateItem.createChoice(date));
-    dateItem.setChoices(choices);
-
-    const duration = Date.now() - startTime;
-    console.log(`=== フォーム日付選択肢更新完了 (${duration}ms): ${availableDates.length}日 ===`);
-
-    logAction('フォーム選択肢更新', 'system', `${availableDates.length}日`);
-
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error(`updateFormDateChoices error (${duration}ms):`, error);
-    logError('フォーム選択肢更新エラー', error.toString());
-  }
-}
 
 /**
  * 空いている日を取得
@@ -1008,11 +934,4 @@ function getAvailableTimesForDate(dateStr, course) {
   return availableTimes;
 }
 
-/**
- * 手動でフォーム選択肢を更新するためのテスト関数
- */
-function testUpdateFormChoices() {
-  console.log('=== フォーム選択肢更新テスト ===');
-  updateFormDateChoices();
-  console.log('=== テスト完了 ===');
-}
+

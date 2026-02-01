@@ -544,12 +544,14 @@ function approveReservation(requestId, adminUserId) {
     const calendarAdded = addToCalendar(booking.approvedDateTime, booking.course, requestId, name);
     console.log('カレンダー登録結果:', calendarAdded ? '成功' : '失敗');
 
-    // ★ フォーム選択肢を更新（空き時間から削除）
+    // ★ フォーム選択肢を更新（新フローでは不要なため停止）
+    /*
     try {
       updateFormDateChoices();
     } catch (updateError) {
       console.error('フォーム選択肢更新エラー:', updateError);
     }
+    */
 
     console.log('承認・確定処理成功:', requestId);
 
