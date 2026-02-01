@@ -860,8 +860,17 @@ function generateRequestId() {
 /**
  * 予約フロー開始 (トリガー: 「予約」)
  * 1. コース選択を提示 (Button Template - Reply API)
+ * ※ 「予約」と打たれたら、過去のFormPendingな予約があれば無効化する（リセット）
  */
 function startReservationFlow(userId, replyToken) {
+  // 既存の入力待ち予約があればキャンセル扱いに更新（リセット）
+  const pendingBooking = findPendingBooking(userId);
+  if (pendingBooking) {
+    pendingBooking.status = 'Reset';
+    pendingBooking.updatedAt = new Date().toISOString();
+    saveBooking(pendingBooking.requestId, pendingBooking);
+  }
+
   const requestId = generateRequestId();
   const booking = {
     requestId: requestId,
@@ -981,16 +990,30 @@ function showDateSelection(requestId, offset, replyToken, userId) {
       });
     }
 
-    // 戻るボタン (コース選択に戻る)
+    // 戻るボタン
+    // offset > 0 なら「前のページ(offset-12)」へ
+    // offset === 0 なら「コース選択」へ
     if (quickReplyItems.length < 13) {
-       quickReplyItems.push({
-        type: 'action',
-        action: {
-          type: 'postback',
-          label: '戻る',
-          data: `back_to_course_${requestId}`
-        }
-      });
+       if (offset > 0) {
+         const prevOffset = Math.max(0, offset - 12);
+         quickReplyItems.push({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '前のページ', // 前のページへ
+            data: `next_dates_${requestId}_${prevOffset}`
+          }
+        });
+       } else {
+         quickReplyItems.push({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '戻る', // コース選択へ
+            data: `back_to_course_${requestId}`
+          }
+        });
+       }
     }
 
     const message = {
@@ -1076,16 +1099,30 @@ function showTimeSelection(requestId, dateStr, offset, replyToken, userId) {
       });
     } 
     
-    // 戻るボタン (日付選択に戻る)
+    // 戻るボタン
+    // offset > 0 なら「前のページ」
+    // offset === 0 なら「日付選択」へ
     if (quickReplyItems.length < 13) {
-        quickReplyItems.push({
-          type: 'action',
-          action: {
-            type: 'postback',
-            label: '戻る',
-            data: `back_to_date_${requestId}`
-          }
-        });
+        if (offset > 0) {
+          const prevOffset = Math.max(0, offset - 12);
+          quickReplyItems.push({
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '前のページ',
+              data: `next_times_${requestId}_${prevOffset}`
+            }
+          });
+        } else {
+          quickReplyItems.push({
+            type: 'action',
+            action: {
+              type: 'postback',
+              label: '戻る',
+              data: `back_to_date_${requestId}`
+            }
+          });
+        }
     }
 
     const message = {
