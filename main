@@ -882,3 +882,25 @@ function handleInitialFormSubmit(e) {
 }
 
 // handleApprovedFormSubmit は廃止（フォーム1回完結のため）
+
+/**
+ * トリガー設定用関数（手動実行用）
+ * 1時間ごとにフォームの選択肢を更新するトリガーを設定
+ */
+function setupTriggers() {
+  // 既存のトリガーをクリア（重複防止）
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'updateFormDateChoices') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // 新しいトリガーを作成（1時間ごと）
+  ScriptApp.newTrigger('updateFormDateChoices')
+    .timeBased()
+    .everyHours(1)
+    .create();
+
+  console.log('✅ フォーム選択肢更新トリガーを設定しました（1時間ごと）');
+}

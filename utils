@@ -853,16 +853,36 @@ function getAvailableDates(days) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // 最小コース時間を取得（デフォルト60分）
+    let minDuration = 60;
+    if (CONFIG.COURSES) {
+      const durations = Object.values(CONFIG.COURSES).map(c => c.duration);
+      if (durations.length > 0) {
+        minDuration = Math.min(...durations);
+      }
+    }
+
     // 当日(i=0)から開始
     for (let i = 0; i <= days; i++) {
       const checkDate = new Date(today);
       checkDate.setDate(today.getDate() + i);
 
-      // 当日の場合：5時間ルールで予約可能か判定
+      // 当日の場合：5時間ルール + 施術時間を考慮して予約可能か判定
       if (i === 0) {
-        // 当日の最終予約可能時刻 = 営業終了 - 締切時間
-        const lastBookableHour = CONFIG.BUSINESS_HOURS.END - CONFIG.BOOKING_DEADLINE_HOURS;
-        if (now.getHours() >= lastBookableHour) {
+        // 営業終了時刻
+        const endHour = CONFIG.BUSINESS_HOURS.END;
+        // 最終予約開始可能時刻 = 営業終了 - 最小施術時間(時間換算)
+        // ※ここではシンプルに「施術が終わる時間」が営業終了を超えないようにする
+        const lastStartHour = endHour - (minDuration / 60); 
+        
+        // 予約締切時刻 = 最終開始時刻 - 5時間
+        const deadlineHour = lastStartHour - CONFIG.BOOKING_DEADLINE_HOURS;
+
+        // 現在時刻と比較 (厳密に分単位でチェック)
+        const deadlineTime = new Date();
+        deadlineTime.setHours(Math.floor(deadlineHour), (deadlineHour % 1) * 60, 0, 0);
+          
+        if (now >= deadlineTime) {
           // 当日はもう予約できない
           continue;
         }
@@ -878,9 +898,17 @@ function getAvailableDates(days) {
       const events = calendar.getEvents(dayStart, dayEnd);
 
       // 空き時間があるかチェック（簡易版: イベント数が少なければ空きあり）
-      // より正確には、各時間帯をチェックする必要があるが、パフォーマンスのため簡易化
-      const maxEventsPerDay = (CONFIG.BUSINESS_HOURS.END - CONFIG.BUSINESS_HOURS.START);
-      if (events.length < maxEventsPerDay) {
+      const businessHoursDuration = CONFIG.BUSINESS_HOURS.END - CONFIG.BUSINESS_HOURS.START;
+      
+      // イベントの合計時間を計算
+      let totalEventDurationMinutes = 0;
+      events.forEach(e => {
+        totalEventDurationMinutes += (e.getEndTime() - e.getStartTime()) / (1000 * 60);
+      });
+      
+      // 営業時間の何割が埋まっているかで判定（90%以上埋まっていたら除外）
+      const totalBusinessMinutes = businessHoursDuration * 60;
+      if (totalEventDurationMinutes < totalBusinessMinutes * 0.9) {
         const year = checkDate.getFullYear();
         const month = checkDate.getMonth() + 1;
         const date = checkDate.getDate();
