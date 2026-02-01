@@ -128,7 +128,15 @@ function handleTextMessage(event) {
       }
     }];
      // 既存の予約開始フロー（テキストトリガー）に流す
-     startReservationFlow(userId, replyToken);
+     try {
+       startReservationFlow(userId, replyToken);
+     } catch (e) {
+       console.error('startReservationFlow error:', e);
+       replyLineMessage(replyToken, [{
+         type: 'text',
+         text: `システムエラーが発生しました。\n${e.toString()}`
+       }]);
+     }
      return; // ここで終了（startReservationFlow内で返信するため）
   }
   // 予約確認
