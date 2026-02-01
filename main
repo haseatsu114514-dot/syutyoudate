@@ -998,11 +998,11 @@ function showDateSelection(requestId, offset, replyToken, userId) {
     }
 
     // 戻るボタン
-    // offset > 0 なら「前のページ(offset-12)」へ
+    // offset > 0 なら「前のページ(offset-11)」へ
     // offset === 0 なら「コース選択」へ
     if (quickReplyItems.length < 13) {
        if (offset > 0) {
-         const prevOffset = Math.max(0, offset - 12);
+         const prevOffset = Math.max(0, offset - 11);
          quickReplyItems.push({
           type: 'action',
           action: {
@@ -1072,6 +1072,12 @@ function handleDateSelection(replyToken, requestId, dateStr, userId) {
 function showTimeSelection(requestId, dateStr, offset, replyToken, userId) {
   try {
     const booking = getBooking(requestId);
+    if (!booking) {
+      const msg = { type: 'text', text: 'エラー：予約データが見つかりません。最初からやり直してください。' };
+      if (replyToken) replyLineMessage(replyToken, [msg]);
+      else sendLineMessage(userId, [msg]);
+      return;
+    }
     const availableTimes = getAvailableTimesForDate(dateStr, booking.course);
 
     if (availableTimes.length === 0) {
@@ -1111,7 +1117,7 @@ function showTimeSelection(requestId, dateStr, offset, replyToken, userId) {
     // offset === 0 なら「日付選択」へ
     if (quickReplyItems.length < 13) {
         if (offset > 0) {
-          const prevOffset = Math.max(0, offset - 12);
+          const prevOffset = Math.max(0, offset - 11);
           quickReplyItems.push({
             type: 'action',
             action: {
