@@ -331,6 +331,30 @@ function handlePostback(event) {
     // 予約データを削除または「キャンセル」ステータスに更新
     handleRescheduleCancel(requestId, userId);
   }
+  // ★ フローキャンセル（コース選択時）
+  else if (data.startsWith('cancel_flow_')) {
+     const requestId = data.replace('cancel_flow_', '');
+     replyLineMessage(replyToken, [{
+       type: 'text',
+       text: '予約をキャンセルしました。'
+     }]);
+     // 必要ならステータス更新
+  }
+  // ★ コース選択に戻る
+  else if (data.startsWith('back_to_course_')) {
+     const requestId = data.replace('back_to_course_', '');
+     showCourseSelection(requestId, userId, replyToken);
+  }
+  // ★ 日付選択に戻る
+  else if (data.startsWith('back_to_date_')) {
+     const requestId = data.replace('back_to_date_', '');
+     showDateSelection(requestId, 0, replyToken, userId);
+  }
+  // ★ 仮押さえキャンセル
+  else if (data.startsWith('cancel_hold_')) {
+     const requestId = data.replace('cancel_hold_', '');
+     handleCancelHold(requestId, userId, replyToken);
+  }
 }
 
 /**
@@ -822,11 +846,20 @@ function handleInitialFormSubmit(e) {
   }
 }
 
+// -------------------------------------------------------------
+//  LINE先行フロー用の関数（ステートレス対応）
+// -------------------------------------------------------------
+
 /**
- * コース選択画面表示
+ * ユニークID生成
  */
+function generateRequestId() {
+  return Utilities.getUuid().slice(0, 8).toUpperCase();
+}
+
 /**
- * 予約フロー開始（Reply Tokenがあれば無料）
+ * 予約フロー開始 (トリガー: 「予約」)
+ * 1. コース選択を提示 (Button Template - Reply API)
  */
 function startReservationFlow(userId, replyToken) {
   const requestId = generateRequestId();
@@ -847,18 +880,23 @@ function startReservationFlow(userId, replyToken) {
  * コース選択画面表示
  */
 function showCourseSelection(requestId, userId, replyToken) {
-  const actions = [
-    {
+  const courseNames = Object.keys(CONFIG.COURSES);
+  
+  const actions = courseNames.map(name => {
+    const course = CONFIG.COURSES[name];
+    return {
       type: 'postback',
-      label: 'Aコース(60分)',
-      data: `select_course_${requestId}_Aコース(60分)`
-    },
-    {
-      type: 'postback',
-      label: 'Bコース(90分)',
-      data: `select_course_${requestId}_Bコース(90分)`
-    }
-  ];
+      label: `${name} (${course.price}円)`,
+      data: `select_course_${requestId}_${name}`
+    };
+  });
+
+  // キャンセルボタンを追加
+  actions.push({
+    type: 'postback',
+    label: 'キャンセル',
+    data: `cancel_flow_${requestId}`
+  });
 
   const message = {
     type: 'template',
@@ -870,10 +908,13 @@ function showCourseSelection(requestId, userId, replyToken) {
     }
   };
 
-  if (replyToken) replyLineMessage(replyToken, [message]);
-  else sendLineMessage(userId, [message]); // Pushになっちゃうけど一応
-  
-  logAction('コース選択依頼', userId, requestId);
+  if (replyToken) {
+    replyLineMessage(replyToken, [message]);
+  } else {
+    // 予備
+    sendLineMessage(userId, [message]);
+  }
+  logAction('コース選択提示', userId, requestId);
 }
 
 /**
@@ -889,6 +930,7 @@ function handleCourseSelection(replyToken, requestId, courseName, userId) {
 
     booking.course = courseName;
     booking.status = 'DatePending';
+    booking.updatedAt = new Date().toISOString();
     saveBooking(requestId, booking);
 
     // 日付選択画面を表示 (offset 0)
@@ -915,7 +957,7 @@ function showDateSelection(requestId, offset, replyToken, userId) {
     }
 
     const start = offset;
-    const end = offset + 12; // 12枠 + 次へボタン
+    const end = offset + 11; // 11枠 + 次へ + 戻る(計13)
     const pagedDates = availableDates.slice(start, end);
     const hasNext = availableDates.length > end;
 
@@ -939,16 +981,14 @@ function showDateSelection(requestId, offset, replyToken, userId) {
       });
     }
 
-    // 戻るボタンの代わりに、もしオフセットが0より大きければ「最初に戻る」などを入れてもいいが、
-    // LINEのUI的に13個制限があるので、12個+次へ で埋まる。
-    // キャンセルボタンを入れる余裕があれば入れる
-    if (!hasNext && quickReplyItems.length < 13) {
+    // 戻るボタン (コース選択に戻る)
+    if (quickReplyItems.length < 13) {
        quickReplyItems.push({
         type: 'action',
         action: {
           type: 'postback',
-          label: 'キャンセル',
-          data: `cancel_reschedule_${requestId}`
+          label: '戻る',
+          data: `back_to_course_${requestId}`
         }
       });
     }
@@ -1012,7 +1052,7 @@ function showTimeSelection(requestId, dateStr, offset, replyToken, userId) {
     }
 
     const start = offset;
-    const end = offset + 12;
+    const end = offset + 11; // 11枠 + 次へ + 戻る
     const pagedTimes = availableTimes.slice(start, end);
     const hasNext = availableTimes.length > end;
 
@@ -1034,22 +1074,18 @@ function showTimeSelection(requestId, dateStr, offset, replyToken, userId) {
           data: `next_times_${requestId}_${end}`
         }
       });
-    } else {
-      // 戻る/キャンセル
-      if (quickReplyItems.length < 13) {
-         quickReplyItems.push({
-           type: 'action',
-           action: {
-             type: 'postback',
-             label: '日付を選び直す',
-             data: `select_course_${requestId}_${booking.course}` // コース選択済み状態に戻す＝日付選択
-             // 実は showDateSelection を呼び出すpostbackがあればいいが、
-             // next_dates_0 を呼べば最初に戻れる
-           }
-         });
-         // data: `next_dates_${requestId}_0` でもよい
-         quickReplyItems[quickReplyItems.length-1].action.data = `next_dates_${requestId}_0`;
-      }
+    } 
+    
+    // 戻るボタン (日付選択に戻る)
+    if (quickReplyItems.length < 13) {
+        quickReplyItems.push({
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '戻る',
+            data: `back_to_date_${requestId}`
+          }
+        });
     }
 
     const message = {
@@ -1144,16 +1180,35 @@ function handleTimeSelection(requestId, timeStr, userId, replyToken) {
             type: 'uri',
             label: '情報を入力して完了',
             uri: formUrl
+          },
+          {
+            type: 'postback',
+            label: '仮押さえをやめる', // 仮押さえキャンセルして最初に戻る
+            data: `cancel_hold_${requestId}`
           }
         ]
       }
     };
     
-    if (replyToken) {
-      replyLineMessage(replyToken, [formMessage]);
-    } else {
-      sendLineMessage(userId, [formMessage]);
-    }
+    // クイックリプライにも「仮押さえをやめる」を入れておく（念のため）
+    const cancelQuickReply = {
+      items: [
+        {
+          type: 'action',
+          action: {
+            type: 'postback',
+            label: '仮押さえをやめる',
+            data: `cancel_hold_${requestId}`
+          }
+        }
+      ]
+    };
+    
+    // Button TemplateにQuickReplyを付与できるか確認：可能
+    formMessage.quickReply = cancelQuickReply;
+
+    if (replyToken) replyLineMessage(replyToken, [formMessage]);
+    else sendLineMessage(userId, [formMessage]);
     
     logAction('フォーム誘導', userId, `${requestId} - ${desiredDateTime}`);
 
@@ -1162,6 +1217,68 @@ function handleTimeSelection(requestId, timeStr, userId, replyToken) {
     const msg = { type: 'text', text: 'エラーが発生しました。' };
     if (replyToken) replyLineMessage(replyToken, [msg]);
     else sendLineMessage(userId, [msg]);
+  }
+}
+
+/**
+ * 簡易カレンダーチェック（確定前の最終確認用）
+ */
+function checkCalendarFast(targetDate, course) {
+  try {
+     // 仮押さえチェック用
+     const dateStr = `${targetDate.getFullYear()}-${targetDate.getMonth()+1}-${targetDate.getDate()}`;
+     const availableTimes = getAvailableTimesForDate(dateStr, course);
+
+     const hours = String(targetDate.getHours()).padStart(2, '0');
+     const minutes = String(targetDate.getMinutes()).padStart(2, '0');
+     const timeStr = `${hours}:${minutes}`;
+
+     if (availableTimes.includes(timeStr)) {
+       return { available: true };
+     } else {
+       return { available: false, reason: '他のお客様が仮押さえ中か、予約済みです' };
+     }
+
+  } catch (e) {
+    console.error('checkCalendarFast error:', e);
+    return { available: false, reason: 'システムエラー' };
+  }
+}
+
+/**
+ * 仮押さえキャンセル
+ */
+function handleCancelHold(requestId, userId, replyToken) {
+  try {
+    const booking = getBooking(requestId);
+    if(booking) {
+      booking.status = 'Cancelled';
+      saveBooking(requestId, booking);
+    }
+    
+    // 最初に戻るメッセージ
+    const msg = {
+      type: 'text',
+      text: '仮押さえを解除しました。\n最初から予約をやり直しますか？',
+      quickReply: {
+        items: [
+          {
+            type: 'action',
+            action: {
+              type: 'message',
+              label: '予約をやり直す',
+              text: '予約'
+            }
+          }
+        ]
+      }
+    };
+    
+    if (replyToken) replyLineMessage(replyToken, [msg]);
+    else sendLineMessage(userId, [msg]);
+    
+  } catch(e) {
+    console.error('handleCancelHold error:', e);
   }
 }
 
