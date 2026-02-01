@@ -901,6 +901,9 @@ function getAvailableTimesForDate(dateStr, course) {
     // 予約締切時間（5時間前）
     // const deadlineHours = CONFIG.BOOKING_DEADLINE_HOURS;
     
+    // ★ 仮押さえ(FormPending)データを一括取得 (ループ内で呼ぶと遅いため)
+    const pendingBookings = getAllPendingBookings();
+
     while (currentTime.getTime() + (minDuration * 60 * 1000) <= endTime.getTime()) {
       
       // 過去の時間は除外
@@ -919,7 +922,7 @@ function getAvailableTimesForDate(dateStr, course) {
       // メモリ上で空き状況チェック
       if (isSlotAvailableOnMemory(currentTime, course, events)) {
         // ★ 仮押さえ(FormPending)チェック
-        if (!isSlotBlockedByPending(currentTime, course)) {
+        if (!isSlotBlockedByPending(currentTime, course, pendingBookings)) {
           const hours = String(currentTime.getHours()).padStart(2, '0');
           const minutes = String(currentTime.getMinutes()).padStart(2, '0');
           availableTimes.push(`${hours}:${minutes}`);
@@ -940,10 +943,11 @@ function getAvailableTimesForDate(dateStr, course) {
  * 仮押さえ(FormPending)によるブロック判定
  * 30分以内に作成されたFormPending状態の予約と重複するかチェック
  */
-function isSlotBlockedByPending(targetTime, course) {
+function isSlotBlockedByPending(targetTime, course, pendingBookings = null) {
   try {
-    const pendingBookings = getAllPendingBookings();
-    if (pendingBookings.length === 0) return false;
+    // 引数で渡されていない場合は取得する (後方互換性)
+    const bookings = pendingBookings || getAllPendingBookings();
+    if (bookings.length === 0) return false;
 
     const courseConfig = CONFIG.COURSES[course];
     const duration = (courseConfig ? courseConfig.duration : 60);
@@ -958,7 +962,7 @@ function isSlotBlockedByPending(targetTime, course) {
     // 30分以内のものだけ有効
     const validPendingThreshold = 30 * 60 * 1000;
 
-    for (const booking of pendingBookings) {
+    for (const booking of bookings) {
       if (!booking.desiredDateTime) continue;
 
       // 古い仮押さえは無視
