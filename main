@@ -1240,22 +1240,7 @@ function handleTimeSelection(requestId, timeStr, userId, replyToken) {
       }
     };
     
-    // クイックリプライにも「仮押さえをやめる」を入れておく（念のため）
-    const cancelQuickReply = {
-      items: [
-        {
-          type: 'action',
-          action: {
-            type: 'postback',
-            label: '仮押さえをやめる',
-            data: `cancel_hold_${requestId}`
-          }
-        }
-      ]
-    };
-    
-    // Button TemplateにQuickReplyを付与できるか確認：可能
-    formMessage.quickReply = cancelQuickReply;
+
 
     if (replyToken) replyLineMessage(replyToken, [formMessage]);
     else sendLineMessage(userId, [formMessage]);
