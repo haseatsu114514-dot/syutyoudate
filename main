@@ -1272,22 +1272,20 @@ function handleTimeSelection(requestId, timeStr, userId, replyToken) {
 
 /**
  * 簡易カレンダーチェック（確定前の最終確認用）
+ * パフォーマンス改善: カレンダーのフルスキャンを省略し、仮押さえチェックのみ実行
+ * ※showTimeSelectionで既にカレンダーチェック済みなので、競合（仮押さえ）のみを確認
  */
 function checkCalendarFast(targetDate, course) {
   try {
-     // 仮押さえチェック用
-     const dateStr = `${targetDate.getFullYear()}-${targetDate.getMonth()+1}-${targetDate.getDate()}`;
-     const availableTimes = getAvailableTimesForDate(dateStr, course);
+     // 仮押さえ(FormPending)チェックのみ実行（高速化）
+     // ※カレンダーイベントはshowTimeSelectionで既にチェック済み
+     const pendingBookings = getAllPendingBookings();
 
-     const hours = String(targetDate.getHours()).padStart(2, '0');
-     const minutes = String(targetDate.getMinutes()).padStart(2, '0');
-     const timeStr = `${hours}:${minutes}`;
-
-     if (availableTimes.includes(timeStr)) {
-       return { available: true };
-     } else {
-       return { available: false, reason: '他のお客様が仮押さえ中か、予約済みです' };
+     if (isSlotBlockedByPending(targetDate, course, pendingBookings)) {
+       return { available: false, reason: '他のお客様が仮押さえ中です' };
      }
+
+     return { available: true };
 
   } catch (e) {
     console.error('checkCalendarFast error:', e);

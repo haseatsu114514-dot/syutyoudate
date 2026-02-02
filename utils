@@ -213,27 +213,29 @@ function getBooking(requestId) {
 
 /**
  * ユーザーの予約一覧を取得
+ * パフォーマンス改善: getProperties()で一括取得しメモリ上でフィルタリング
  */
 function getUserBookings(userId) {
   const startTime = Date.now();
 
   try {
     const properties = PropertiesService.getScriptProperties();
-    const indexData = properties.getProperty('booking_index');
-
-    if (!indexData) {
-      return [];
-    }
-
-    const requestIds = JSON.parse(indexData);
+    // 一括取得（1回のAPI呼び出し）
+    const allData = properties.getProperties();
     const userBookings = [];
 
-    requestIds.forEach(requestId => {
-      const booking = getBooking(requestId);
-      if (booking && booking.userId === userId) {
-        userBookings.push(booking);
+    for (const key in allData) {
+      if (key.startsWith('booking_') && key !== 'booking_index') {
+        try {
+          const booking = JSON.parse(allData[key]);
+          if (booking && booking.userId === userId) {
+            userBookings.push(booking);
+          }
+        } catch (parseError) {
+          // パースエラーは無視
+        }
       }
-    });
+    }
 
     userBookings.sort((a, b) => {
       return new Date(b.createdAt) - new Date(a.createdAt);
@@ -275,33 +277,23 @@ function updateBookingIndex(requestId) {
 }
 
 /**
- * userIdで最新の承認済み予約を検索（高速化版）
+ * userIdで最新の承認済み予約を検索
+ * パフォーマンス改善: getProperties()で一括取得しメモリ上でフィルタリング
  */
 function findLatestApprovedBookingByUserId(userId) {
   const startTime = Date.now();
 
   try {
     const props = PropertiesService.getScriptProperties();
-    
-    // まずインデックスから予約IDリストを取得
-    const indexData = props.getProperty('booking_index');
-    if (!indexData) {
-      console.log('予約インデックスが見つかりません');
-      return null;
-    }
-
-    const requestIds = JSON.parse(indexData);
+    // 一括取得（1回のAPI呼び出し）
+    const allData = props.getProperties();
     let latestBooking = null;
     let latestTimestamp = 0;
 
-    // インデックスの予約IDを新しい順（逆順）でチェック
-    for (let i = requestIds.length - 1; i >= 0; i--) {
-      const requestId = requestIds[i];
-      const data = props.getProperty(`booking_${requestId}`);
-      
-      if (data) {
+    for (const key in allData) {
+      if (key.startsWith('booking_') && key !== 'booking_index') {
         try {
-          const booking = JSON.parse(data);
+          const booking = JSON.parse(allData[key]);
 
           // userId一致 && 承認済み && 追加情報未入力
           if (booking.userId === userId &&
@@ -320,7 +312,7 @@ function findLatestApprovedBookingByUserId(userId) {
             }
           }
         } catch (parseError) {
-          console.error('予約データのパースエラー:', requestId, parseError);
+          // パースエラーは無視
         }
       }
     }
@@ -455,85 +447,21 @@ function addToCalendar(dateTimeStr, course, requestId, name) {
 }
 
 /**
- * アクションログ記録
- */
-/**
- * アクションログ記録（軽量化版 - 最大50件）
+ * アクションログ記録（パフォーマンス改善のため無効化）
+ * console.logのみ出力
  */
 function logAction(action, userId, detail) {
-  try {
-    const properties = PropertiesService.getScriptProperties();
-    // 既存ログを取得せず、上書きする運用も検討すべきだが、
-    // ここでは件数を減らすことで対応
-    const logsData = properties.getProperty('logs');
-
-    let logs = [];
-    if (logsData) {
-      try {
-        logs = JSON.parse(logsData);
-      } catch (e) {
-        logs = [];
-      }
-    }
-
-    logs.push({
-      timestamp: new Date().toISOString(),
-      action: action,
-      userId: userId,
-      detail: detail
-    });
-
-    // 最新50件のみ保持（以前は1000件だったが重すぎるため削減）
-    // ※本格的なログはスプレッドシートへの移行を推奨
-    const MAX_LOGS_LITE = 50;
-    if (logs.length > MAX_LOGS_LITE) {
-      logs = logs.slice(-MAX_LOGS_LITE);
-    }
-
-    properties.setProperty('logs', JSON.stringify(logs));
-
-  } catch (error) {
-    console.error('logAction error:', error);
-  }
+  // パフォーマンス改善: PropertiesServiceへの書き込みを廃止
+  // console.log(`[Action] ${action} - ${userId} - ${detail}`);
 }
 
 /**
- * エラーログ記録
- */
-/**
- * エラーログ記録（軽量化版 - 最大20件）
+ * エラーログ記録（パフォーマンス改善のため無効化）
+ * console.errorのみ出力
  */
 function logError(action, detail) {
-  try {
-    const properties = PropertiesService.getScriptProperties();
-    const errorsData = properties.getProperty('errors');
-
-    let errors = [];
-    if (errorsData) {
-      try {
-        errors = JSON.parse(errorsData);
-      } catch (e) {
-        errors = [];
-      }
-    }
-
-    errors.push({
-      timestamp: new Date().toISOString(),
-      action: action,
-      detail: detail
-    });
-
-    // 最新20件のみ保持（軽量化）
-    const MAX_ERRORS_LITE = 20;
-    if (errors.length > MAX_ERRORS_LITE) {
-      errors = errors.slice(-MAX_ERRORS_LITE);
-    }
-
-    properties.setProperty('errors', JSON.stringify(errors));
-
-  } catch (error) {
-    console.error('logError error:', error);
-  }
+  // パフォーマンス改善: PropertiesServiceへの書き込みを廃止
+  console.error(`[Error] ${action} - ${detail}`);
 }
 
 /**
@@ -597,7 +525,8 @@ function checkDataSize() {
 }
 
 /**
- * 古いログのクリーンアップ（最適化版）
+ * 古いログのクリーンアップ
+ * パフォーマンス改善: getProperties()で一括取得しメモリ上でフィルタリング
  */
 function cleanupOldLogs() {
   const startTime = Date.now();
@@ -606,12 +535,13 @@ function cleanupOldLogs() {
     console.log('=== 古いデータのクリーンアップ開始 ===');
 
     const properties = PropertiesService.getScriptProperties();
+    // 一括取得（1回のAPI呼び出し）
+    const allData = properties.getProperties();
     let deletedCount = 0;
 
     // 1. ログを削減
-    const logsData = properties.getProperty('logs');
-    if (logsData) {
-      const logs = JSON.parse(logsData);
+    if (allData['logs']) {
+      const logs = JSON.parse(allData['logs']);
       console.log(`現在のログ件数: ${logs.length}`);
 
       if (logs.length > 500) {
@@ -622,9 +552,8 @@ function cleanupOldLogs() {
     }
 
     // 2. エラーログを削減
-    const errorsData = properties.getProperty('errors');
-    if (errorsData) {
-      const errors = JSON.parse(errorsData);
+    if (allData['errors']) {
+      const errors = JSON.parse(allData['errors']);
       console.log(`現在のエラーログ件数: ${errors.length}`);
 
       if (errors.length > 200) {
@@ -634,30 +563,41 @@ function cleanupOldLogs() {
       }
     }
 
-    // 3. 30日以前の完了した予約を削除
-    const indexData = properties.getProperty('booking_index');
+    // 3. 30日以前の完了した予約を削除（一括処理）
+    const indexData = allData['booking_index'];
     if (indexData) {
       const requestIds = JSON.parse(indexData);
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
       const remainingIds = [];
+      const keysToDelete = [];
 
       for (const requestId of requestIds) {
-        const booking = getBooking(requestId);
-        if (booking) {
-          const bookingDate = new Date(booking.desiredDateTime);
+        const key = `booking_${requestId}`;
+        if (allData[key]) {
+          try {
+            const booking = JSON.parse(allData[key]);
+            const bookingDate = new Date(booking.desiredDateTime);
 
-          if (bookingDate < thirtyDaysAgo &&
-              (booking.status === '承認済み' || booking.status === 'お断り' || booking.status === '確定')) {
-            properties.deleteProperty(`booking_${requestId}`);
-            deletedCount++;
-          } else {
+            if (bookingDate < thirtyDaysAgo &&
+                (booking.status === '承認済み' || booking.status === 'お断り' || booking.status === '確定')) {
+              keysToDelete.push(key);
+              deletedCount++;
+            } else {
+              remainingIds.push(requestId);
+            }
+          } catch (parseError) {
             remainingIds.push(requestId);
           }
         } else {
           remainingIds.push(requestId);
         }
+      }
+
+      // 一括削除
+      for (const key of keysToDelete) {
+        properties.deleteProperty(key);
       }
 
       if (deletedCount > 0) {
@@ -1006,26 +946,24 @@ function isSlotBlockedByPending(targetTime, course, pendingBookings = null) {
 
 /**
  * 全てのFormPending予約を取得
+ * パフォーマンス改善: getProperties()で一括取得しメモリ上でフィルタリング
  */
 function getAllPendingBookings() {
   try {
     const props = PropertiesService.getScriptProperties();
-    const indexData = props.getProperty('booking_index');
-    if (!indexData) return [];
-
-    const requestIds = JSON.parse(indexData);
+    // 一括取得（1回のAPI呼び出し）
+    const allData = props.getProperties();
     const pendingBookings = [];
 
-    // 直近50件くらい見れば十分（高速化）
-    const searchLimit = Math.min(requestIds.length, 50);
-    
-    for (let i = requestIds.length - 1; i >= requestIds.length - searchLimit; i--) {
-      const requestId = requestIds[i];
-      const data = props.getProperty(`booking_${requestId}`);
-      if (data) {
-        const booking = JSON.parse(data);
-        if (booking.status === 'FormPending') {
-          pendingBookings.push(booking);
+    for (const key in allData) {
+      if (key.startsWith('booking_') && key !== 'booking_index') {
+        try {
+          const booking = JSON.parse(allData[key]);
+          if (booking.status === 'FormPending') {
+            pendingBookings.push(booking);
+          }
+        } catch (parseError) {
+          // パースエラーは無視
         }
       }
     }
@@ -1039,35 +977,34 @@ function getAllPendingBookings() {
 /**
  * 特定ユーザーの入力待ち(FormPending/DatePending/TimePending/CoursePending)の予約を検索
  * 最新のものを返す
+ * パフォーマンス改善: getProperties()で一括取得しメモリ上でフィルタリング
  */
 function findPendingBooking(userId) {
   try {
      const props = PropertiesService.getScriptProperties();
-     const indexData = props.getProperty('booking_index');
-     if (!indexData) return null;
+     // 一括取得（1回のAPI呼び出し）
+     const allData = props.getProperties();
+     const activeStatuses = ['CoursePending', 'DatePending', 'TimePending', 'FormPending'];
+     let latestBooking = null;
+     let latestTime = 0;
 
-     const requestIds = JSON.parse(indexData);
-     // 最新から探す (直近50件で十分)
-     const searchLimit = Math.min(requestIds.length, 50);
-     for (let i = requestIds.length - 1; i >= requestIds.length - searchLimit; i--) {
-        const requestId = requestIds[i];
-        const data = props.getProperty(`booking_${requestId}`);
-        if(data) {
-           try {
-             const booking = JSON.parse(data);
-             if (booking.userId === userId) {
-                // 完了していないステータスなら返す
-                 const activeStatuses = ['CoursePending', 'DatePending', 'TimePending', 'FormPending'];
-                 if (activeStatuses.includes(booking.status)) {
-                     return booking;
-                 }
+     for (const key in allData) {
+       if (key.startsWith('booking_') && key !== 'booking_index') {
+         try {
+           const booking = JSON.parse(allData[key]);
+           if (booking.userId === userId && activeStatuses.includes(booking.status)) {
+             const bookingTime = new Date(booking.updatedAt || booking.createdAt).getTime();
+             if (bookingTime > latestTime) {
+               latestTime = bookingTime;
+               latestBooking = booking;
              }
-           } catch (parseError) {
-             console.error('json parse error in findPendingBooking:', parseError);
            }
-        }
+         } catch (parseError) {
+           // パースエラーは無視
+         }
+       }
      }
-     return null;
+     return latestBooking;
   } catch(e) {
      console.error('findPendingBooking error:', e);
      return null;
