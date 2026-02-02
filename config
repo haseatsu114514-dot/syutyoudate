@@ -61,9 +61,9 @@ const CONFIG = {
     // APPROVED フォームは廃止（フォーム1回完結のため）
   },
 
-  // リトライ設定（最適化済み）
+  // リトライ設定（高速化）
   RETRY_COUNT: 2,
-  RETRY_DELAY_MS: 1000,
+  RETRY_DELAY_MS: 300, // 1000ms → 300msに短縮
 
   // ログ設定
   MAX_LOGS: 1000,
@@ -75,8 +75,8 @@ const CONFIG = {
   MAX_CALENDAR_CHECK_TIME_MS: 10000, // 10秒に短縮
   MAX_SLOT_SUGGESTIONS: 2, // 提案数を削減して高速化
 
-  // データサイズチェックの頻度
-  DATA_SIZE_CHECK_PROBABILITY: 0.1
+  // データサイズチェックの頻度（高速化のため低減）
+  DATA_SIZE_CHECK_PROBABILITY: 0.02 // 10% → 2%に低減
 };
 
 // ============================================
